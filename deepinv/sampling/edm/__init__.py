@@ -44,3 +44,5 @@ def load_model(model_name: str = "edm-afhqv2-64x64-uncond-ve.pkl") -> nn.Module:
             sum(p.numel() for p in net.model.parameters()),
         )
     return ModelWrapper(net)
+
+
