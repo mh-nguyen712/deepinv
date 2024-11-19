@@ -72,14 +72,15 @@ def get_edm_parameters(discretization: str = "edm"):
         )
         vp_sigma_inv = (
             lambda sigma: (
-                (vp_beta_min**2 + 2 * vp_beta_d * (sigma**2 + 1).log()) ** 0.5
+                (vp_beta_min**2 + 2 * vp_beta_d * np.log(sigma**2 + 1)) ** 0.5
                 - vp_beta_min
             )
             / vp_beta_d
         )
 
         def vp_timesteps(num_steps):
-            return 1 + np.arange(num_steps - 1) * (1e-3 - 1) / (num_steps - 1)
+            return 1 + np.arange(num_steps) * (1e-3 - 1) / (num_steps - 1)
+            # return np.apply_along_axis(vp_sigma_inv, 0, arr=1 + np.arange(num_steps - 1) * (1e-3 - 1) / (num_steps - 1))
 
         solver = "euler"
         timesteps_fn = vp_timesteps
@@ -128,7 +129,7 @@ def get_edm_parameters(discretization: str = "edm"):
         def edm_timesteps(num_steps):
             return (
                 edm_sigma_max**edm_one_over_rho
-                + np.arange(num_steps - 1)
+                + np.arange(num_steps)
                 * (edm_sigma_min**edm_one_over_rho - edm_sigma_max**edm_one_over_rho)
                 / (num_steps - 1)
             ) ** edm_rho

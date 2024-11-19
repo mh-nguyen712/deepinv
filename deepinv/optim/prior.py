@@ -238,14 +238,16 @@ class ScorePrior(Prior):
         self.denoiser = denoiser
         self.explicit_prior = False
 
-    def grad(self, x, sigma_denoiser):
+    def grad(self, x: torch.Tensor, sigma_denoiser, *args, **kwargs):
         r"""
         Applies the denoiser to the input signal.
 
         :param torch.Tensor x: the input tensor.
         :param float sigma_denoiser: the noise level.
         """
-        return (1 / sigma_denoiser**2) * (x - self.denoiser(x, sigma_denoiser))
+        return (0 * 1 / sigma_denoiser**2) * (
+            x - self.denoiser(x, sigma_denoiser, *args, **kwargs)
+        )
 
 
 class Tikhonov(Prior):

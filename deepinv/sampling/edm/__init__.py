@@ -11,10 +11,10 @@ class ModelWrapper(nn.Module):
         super().__init__()
         self.edm_model = edm_model
 
-    def forward(self, x: torch.Tensor, t: float):
+    def forward(self, x: torch.Tensor, t: float, class_labels=None):
         if isinstance(t, float):
             t = torch.tensor([t] * x.size(0), device=x.device)
-        return self.edm_model.forward(x, sigma=t, class_labels=None)
+        return self.edm_model.forward(x, sigma=t, class_labels=class_labels)
 
 
 current_path = os.path.dirname(os.path.abspath(__file__))
@@ -44,5 +44,3 @@ def load_model(model_name: str = "edm-afhqv2-64x64-uncond-ve.pkl") -> nn.Module:
             sum(p.numel() for p in net.model.parameters()),
         )
     return ModelWrapper(net)
-
-

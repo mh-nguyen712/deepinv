@@ -11,9 +11,8 @@ class BaseSDESolver(nn.Module):
         self,
         sde,
         rng: Optional[torch.Generator] = None,
-        **kwargs,
     ):
-        super().__init__(**kwargs)
+        super().__init__()
         self.sde = sde
 
         self.rng = rng

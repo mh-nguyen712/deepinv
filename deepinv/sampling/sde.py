@@ -58,7 +58,7 @@ class BaseSDE(nn.Module):
         **kwargs,
     ):
         solver_fn = select_sde_solver(method)
-        solver = solver_fn(sde=self, rng=self.rng, **kwargs)
+        solver = solver_fn(sde=self, rng=self.rng)
         samples = solver.sample(x_init, timesteps=timesteps, *args, **kwargs)
         return samples
 
@@ -125,48 +125,71 @@ class DiffusionSDE(nn.Module):
         use_backward_ode=False,
         dtype=torch.float32,
         device=torch.device("cpu"),
-        *args,
-        **kwargs,
     ):
         super().__init__()
         self.prior = prior
         self.rng = rng
         self.use_backward_ode = use_backward_ode
-        drift_forw = lambda x, t, *args, **kwargs: drift(x, t)
-        diff_forw = lambda t: diffusion(t)
+
+        def drift_forw(x, t, *args, **kwargs):
+            return drift(x, t, *args, **kwargs)
+
+        def diff_forw(t):
+            return diffusion(t)
+
         self.forward_sde = BaseSDE(
             drift=drift_forw, diffusion=diff_forw, rng=rng, dtype=dtype, device=device
         )
-
         if self.use_backward_ode:
-            drift_back = lambda x, t, *args, **kwargs: -drift(x, t) + 0.5 * (
-                diffusion(t) ** 2
-            ) * self.score(x, t, *args, **kwargs)
+            def diff_back(t):
+                return 0.0
+
+            def drift_back(x, t, *args, **kwargs):
+                return -drift(x, t, *args, **kwargs) + 0.5 * (
+                    diffusion(t) ** 2
+                ) * self.score(x, t, *args, **kwargs)
         else:
-            drift_back = lambda x, t, *args, **kwargs: -drift(x, t) + (
-                diffusion(t) ** 2
-            ) * self.score(x, t, *args, **kwargs)
-        diff_back = lambda t: diffusion(t)
+            def drift_back(x, t, *args, **kwargs):
+                -drift(x, t, *args, **kwargs) + (diffusion(t) ** 2) * self.score(
+                    x, t, *args, **kwargs
+                )
+            def diff_back(t):
+                return diffusion(t)
+
         self.backward_sde = BaseSDE(
             drift=drift_back, diffusion=diff_back, rng=rng, dtype=dtype, device=device
         )
 
-    def score(self, x: Tensor, sigma: Union[Tensor, float], rescale: bool = False):
+    def score(
+        self,
+        x: Tensor,
+        sigma: Union[Tensor, float],
+        rescale: bool = False,
+        *args,
+        **kwargs,
+    ):
         if rescale:
             x = (x + 1) * 0.5
             sigma_in = sigma * 0.5
         else:
             sigma_in = sigma
-        score = -self.prior.grad(x, sigma_in)
+        score = -self.prior.grad(x, sigma_in, *args, **kwargs)
         if rescale:
             score = score * 2 - 1
         return score
 
     @torch.no_grad()
     def forward(
-        self, x_init: Optional[Tensor], timesteps: Tensor, method: str = "Euler"
+        self,
+        x_init: Optional[Tensor],
+        timesteps: Tensor,
+        method: str = "Euler",
+        *args,
+        **kwargs,
     ):
-        return self.backward_sde.sample(x_init, timesteps=timesteps, method=method)
+        return self.backward_sde.sample(
+            x_init, timesteps=timesteps, method=method, *args, **kwargs
+        )
 
 
 class EDMSDE(DiffusionSDE):
@@ -195,26 +218,35 @@ class EDMSDE(DiffusionSDE):
         s_deriv_fn = params["s_deriv_fn"]
 
         # Forward SDE
-        drift_forw = lambda x, t, *args, **kwargs: (
-            -sigma_deriv_fn(t) * sigma_fn(t) + beta_fn(t) * sigma_fn(t) ** 2
-        ) * self.score(x, sigma_fn(t), *args, **kwargs)
-        diff_forw = lambda t: sigma_fn(t) * (2 * beta_fn(t)) ** 0.5
+        def drift_forw(x, t, *args, **kwargs):
+            return (
+                -sigma_deriv_fn(t) * sigma_fn(t) + beta_fn(t) * sigma_fn(t) ** 2
+            ) * self.score(x, sigma_fn(t), *args, **kwargs)
+
+        def diff_forw(t):
+            return sigma_fn(t) * (2 * beta_fn(t)) ** 0.5
 
         # Backward SDE
         if self.use_backward_ode:
-            diff_back = lambda t: 0.0
-            drift_back = lambda x, t, *args, **kwargs: -(
-                (s_deriv_fn(t) / s_fn(t)) * x
-                - (s_fn(t) ** 2)
-                * sigma_deriv_fn(t)
-                * sigma_fn(t)
-                * self.score(x, sigma_fn(t), *args, **kwargs)
-            )
+            def diff_back(t):
+                return 0.0
+
+            def drift_back(x, t, *args, **kwargs):
+                return -(
+                    (s_deriv_fn(t) / s_fn(t)) * x
+                    - (s_fn(t) ** 2)
+                    * sigma_deriv_fn(t)
+                    * sigma_fn(t)
+                    * self.score(x / s_fn(t), sigma_fn(t), *args, **kwargs)
+                )
         else:
-            drift_back = lambda x, t, *args, **kwargs: (
-                sigma_deriv_fn(t) * sigma_fn(t) + beta_fn(t) * sigma_fn(t) ** 2
-            ) * self.score(x, sigma_fn(t), *args, **kwargs)
-            diff_back = diff_forw
+            def drift_back(x, t, *args, **kwargs):
+                return (
+                    sigma_deriv_fn(t) * sigma_fn(t) + beta_fn(t) * sigma_fn(t) ** 2
+                ) * self.score(x, sigma_fn(t), *args, **kwargs)
+
+            def diff_back(t):
+                return diff_forw(t)
 
         self.forward_sde = BaseSDE(
             drift=drift_forw,
@@ -234,6 +266,8 @@ class EDMSDE(DiffusionSDE):
             *args,
             **kwargs,
         )
+        self.device = device
+        self.dtype = dtype
 
     @torch.no_grad()
     def forward(
@@ -242,13 +276,15 @@ class EDMSDE(DiffusionSDE):
         shape: Tuple[int, ...] = None,
         method: str = "Euler",
         max_iter: int = 100,
+        **kwargs,
     ):
         if latents is None:
             latents = (
-                torch.randn(shape, device=device, generator=self.rng) * self.sigma_max
+                torch.randn(shape, device=self.device, generator=self.rng)
+                * self.sigma_max
             )
         return self.backward_sde.sample(
-            latents, timesteps=self.timesteps_fn(max_iter), method=method
+            latents, timesteps=self.timesteps_fn(max_iter), method=method, **kwargs
         )
 
     @torch.no_grad()
