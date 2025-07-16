@@ -167,10 +167,10 @@ operator.
 
  .. code-block:: none
 
-      0%|          | 0.00/9.91M [00:00<?, ?B/s]      8%|▊         | 754k/9.91M [00:00<00:01, 7.51MB/s]    100%|██████████| 9.91M/9.91M [00:00<00:00, 53.5MB/s]
-      0%|          | 0.00/28.9k [00:00<?, ?B/s]    100%|██████████| 28.9k/28.9k [00:00<00:00, 1.46MB/s]
-      0%|          | 0.00/1.65M [00:00<?, ?B/s]     34%|███▍      | 557k/1.65M [00:00<00:00, 5.42MB/s]    100%|██████████| 1.65M/1.65M [00:00<00:00, 13.2MB/s]
-      0%|          | 0.00/4.54k [00:00<?, ?B/s]    100%|██████████| 4.54k/4.54k [00:00<00:00, 21.0MB/s]
+      0%|          | 0.00/9.91M [00:00<?, ?B/s]    100%|██████████| 9.91M/9.91M [00:00<00:00, 132MB/s]
+      0%|          | 0.00/28.9k [00:00<?, ?B/s]    100%|██████████| 28.9k/28.9k [00:00<00:00, 11.5MB/s]
+      0%|          | 0.00/1.65M [00:00<?, ?B/s]    100%|██████████| 1.65M/1.65M [00:00<00:00, 80.1MB/s]
+      0%|          | 0.00/4.54k [00:00<?, ?B/s]    100%|██████████| 4.54k/4.54k [00:00<00:00, 24.3MB/s]
     Dataset has been saved at measurements/dinv_dataset0.h5
 
 
@@ -225,7 +225,7 @@ model trained that was with 1000 images for 20 epochs.
  .. code-block:: none
 
     Downloading: "https://huggingface.co/deepinv/measplit/resolve/main/demo_measplit_mnist_tomography.pth?download=true" to /home/runner/.cache/torch/hub/checkpoints/demo_measplit_mnist_tomography.pth
-      0%|          | 0.00/5.13M [00:00<?, ?B/s]    100%|██████████| 5.13M/5.13M [00:00<00:00, 222MB/s]
+      0%|          | 0.00/5.13M [00:00<?, ?B/s]    100%|██████████| 5.13M/5.13M [00:00<00:00, 170MB/s]
 
 
 
@@ -393,7 +393,7 @@ worse than MC averaging:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 10.432 seconds)
+   **Total running time of the script:** (0 minutes 9.948 seconds)
 
 
 .. _sphx_glr_download_auto_examples_self-supervised-learning_demo_splitting_loss.py:

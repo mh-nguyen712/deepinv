@@ -6,7 +6,7 @@
 
 Computation times
 =================
-**33:31.332** total execution time for 6 files **from auto_examples/sampling**:
+**33:38.824** total execution time for 6 files **from auto_examples/sampling**:
 
 .. container::
 
@@ -33,20 +33,20 @@ Computation times
      - Time
      - Mem (MB)
    * - :ref:`sphx_glr_auto_examples_sampling_demo_diffusion_sde.py` (``demo_diffusion_sde.py``)
-     - 30:36.829
+     - 30:40.961
      - 0.0
    * - :ref:`sphx_glr_auto_examples_sampling_demo_dps.py` (``demo_dps.py``)
-     - 01:29.943
+     - 01:32.665
      - 0.0
    * - :ref:`sphx_glr_auto_examples_sampling_demo_diffpir.py` (``demo_diffpir.py``)
-     - 01:19.110
+     - 01:20.029
      - 0.0
    * - :ref:`sphx_glr_auto_examples_sampling_demo_ddrm.py` (``demo_ddrm.py``)
-     - 00:04.648
+     - 00:04.506
      - 0.0
    * - :ref:`sphx_glr_auto_examples_sampling_demo_sampling.py` (``demo_sampling.py``)
-     - 00:00.555
+     - 00:00.532
      - 0.0
    * - :ref:`sphx_glr_auto_examples_sampling_demo_custom_kernel.py` (``demo_custom_kernel.py``)
-     - 00:00.247
+     - 00:00.132
      - 0.0

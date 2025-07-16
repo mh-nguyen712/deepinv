@@ -6,7 +6,7 @@
 
 Computation times
 =================
-**02:39.480** total execution time for 9 files **from auto_examples/self-supervised-learning**:
+**02:41.185** total execution time for 9 files **from auto_examples/self-supervised-learning**:
 
 .. container::
 
@@ -33,29 +33,29 @@ Computation times
      - Time
      - Mem (MB)
    * - :ref:`sphx_glr_auto_examples_self-supervised-learning_demo_ei_transforms.py` (``demo_ei_transforms.py``)
-     - 02:10.202
+     - 02:12.085
      - 0.0
    * - :ref:`sphx_glr_auto_examples_self-supervised-learning_demo_equivariant_imaging.py` (``demo_equivariant_imaging.py``)
-     - 00:11.459
+     - 00:11.586
      - 0.0
    * - :ref:`sphx_glr_auto_examples_self-supervised-learning_demo_splitting_loss.py` (``demo_splitting_loss.py``)
-     - 00:10.432
+     - 00:09.948
      - 0.0
    * - :ref:`sphx_glr_auto_examples_self-supervised-learning_demo_multioperator_imaging.py` (``demo_multioperator_imaging.py``)
-     - 00:03.035
+     - 00:03.089
      - 0.0
    * - :ref:`sphx_glr_auto_examples_self-supervised-learning_demo_unsure.py` (``demo_unsure.py``)
-     - 00:01.608
+     - 00:01.626
      - 0.0
    * - :ref:`sphx_glr_auto_examples_self-supervised-learning_demo_artifact2artifact.py` (``demo_artifact2artifact.py``)
-     - 00:01.195
+     - 00:01.282
      - 0.0
    * - :ref:`sphx_glr_auto_examples_self-supervised-learning_demo_sure_denoising.py` (``demo_sure_denoising.py``)
-     - 00:00.633
-     - 0.0
-   * - :ref:`sphx_glr_auto_examples_self-supervised-learning_demo_n2n_denoising.py` (``demo_n2n_denoising.py``)
-     - 00:00.462
+     - 00:00.593
      - 0.0
    * - :ref:`sphx_glr_auto_examples_self-supervised-learning_demo_r2r_denoising.py` (``demo_r2r_denoising.py``)
-     - 00:00.454
+     - 00:00.506
+     - 0.0
+   * - :ref:`sphx_glr_auto_examples_self-supervised-learning_demo_n2n_denoising.py` (``demo_n2n_denoising.py``)
+     - 00:00.470
      - 0.0

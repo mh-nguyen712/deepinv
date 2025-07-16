@@ -632,28 +632,30 @@ You can then apply them by calling the model with the noisy image and the noise 
 <img src="../../_images/sphx_glr_demo_denoiser_tour_002.png" srcset="../../_images/sphx_glr_demo_denoiser_tour_002.png" alt="Noise level $\sigma=0.20$, Original, Noisy   (PSNR: 13.99), DnCNN   (PSNR: 13.99), DRUNet   (PSNR: 27.13), SCUNet   (PSNR: 24.37), SwinIR   (PSNR: 15.53)" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>Downloading: &quot;https://huggingface.co/deepinv/dncnn/resolve/main/dncnn_sigma2_color.pth?download=true&quot; to /home/runner/.cache/torch/hub/checkpoints/dncnn_sigma2_color.pth
 
   0%|          | 0.00/2.56M [00:00&lt;?, ?B/s]
-100%|██████████| 2.56M/2.56M [00:00&lt;00:00, 166MB/s]
+100%|██████████| 2.56M/2.56M [00:00&lt;00:00, 64.6MB/s]
 Downloading: &quot;https://huggingface.co/deepinv/drunet/resolve/main/drunet_deepinv_color_finetune_22k.pth?download=true&quot; to /home/runner/.cache/torch/hub/checkpoints/drunet_deepinv_color_finetune_22k.pth
 
   0%|          | 0.00/125M [00:00&lt;?, ?B/s]
- 25%|██▍       | 31.1M/125M [00:00&lt;00:00, 326MB/s]
- 51%|█████     | 63.2M/125M [00:00&lt;00:00, 332MB/s]
- 77%|███████▋  | 95.5M/125M [00:00&lt;00:00, 335MB/s]
-100%|██████████| 125M/125M [00:00&lt;00:00, 339MB/s]
+ 17%|█▋        | 21.8M/125M [00:00&lt;00:00, 227MB/s]
+ 40%|████      | 50.2M/125M [00:00&lt;00:00, 269MB/s]
+ 61%|██████    | 76.0M/125M [00:00&lt;00:00, 221MB/s]
+ 79%|███████▊  | 98.0M/125M [00:00&lt;00:00, 195MB/s]
+ 99%|█████████▉| 124M/125M [00:00&lt;00:00, 218MB/s]
+100%|██████████| 125M/125M [00:00&lt;00:00, 220MB/s]
 Downloading: &quot;https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/005_colorDN_DFWB_s128w8_SwinIR-M_noise15.pth&quot; to /home/runner/.cache/torch/hub/checkpoints/005_colorDN_DFWB_s128w8_SwinIR-M_noise15.pth
 
   0%|          | 0.00/117M [00:00&lt;?, ?B/s]
- 15%|█▍        | 17.1M/117M [00:00&lt;00:00, 178MB/s]
- 35%|███▌      | 41.2M/117M [00:00&lt;00:00, 222MB/s]
- 61%|██████    | 71.5M/117M [00:00&lt;00:00, 265MB/s]
- 85%|████████▌ | 100M/117M [00:00&lt;00:00, 279MB/s]
-100%|██████████| 117M/117M [00:00&lt;00:00, 264MB/s]
+ 18%|█▊        | 21.5M/117M [00:00&lt;00:00, 225MB/s]
+ 47%|████▋     | 54.9M/117M [00:00&lt;00:00, 298MB/s]
+ 74%|███████▍  | 86.6M/117M [00:00&lt;00:00, 314MB/s]
+ 99%|█████████▉| 117M/117M [00:00&lt;00:00, 283MB/s]
+100%|██████████| 117M/117M [00:00&lt;00:00, 286MB/s]
 Downloading: &quot;https://huggingface.co/deepinv/scunet/resolve/main/scunet_color_real_psnr.pth?download=true&quot; to /home/runner/.cache/torch/hub/checkpoints/scunet_color_real_psnr.pth
 
   0%|          | 0.00/68.6M [00:00&lt;?, ?B/s]
- 34%|███▎      | 23.1M/68.6M [00:00&lt;00:00, 242MB/s]
- 67%|██████▋   | 46.2M/68.6M [00:00&lt;00:00, 237MB/s]
-100%|██████████| 68.6M/68.6M [00:00&lt;00:00, 268MB/s]
+ 31%|███       | 21.1M/68.6M [00:00&lt;00:00, 219MB/s]
+ 66%|██████▌   | 45.2M/68.6M [00:00&lt;00:00, 239MB/s]
+100%|██████████| 68.6M/68.6M [00:00&lt;00:00, 242MB/s]
 </pre></div>
 </div>
 </section>
@@ -723,11 +725,11 @@ time and performances.</p>
 <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><a href="https://docs.python.org/3.9/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">res</span></a><span class="p">)</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>Denoiser DRUNet... done (9.00s)
-Denoiser SCUNet... done (8.34s)
-Denoiser DnCNN... done (1.68s)
-Denoiser BM3D... done (23.77s)
-Denoiser Wavelet... done (1.27s)
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>Denoiser DRUNet... done (8.21s)
+Denoiser SCUNet... done (7.65s)
+Denoiser DnCNN... done (1.60s)
+Denoiser BM3D... done (23.99s)
+Denoiser Wavelet... done (1.25s)
 </pre></div>
 </div>
 <p>We can now compare the performances of the different denoisers.
@@ -928,7 +930,7 @@ We can define a wrapper that automatically applies this rescaling.</p>
 <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 </pre></div>
 </div>
-<img src="../../_images/sphx_glr_demo_denoiser_tour_008.png" srcset="../../_images/sphx_glr_demo_denoiser_tour_008.png" alt="demo denoiser tour" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>Denoiser DnCNN (adapted)... done (1.57s)
+<img src="../../_images/sphx_glr_demo_denoiser_tour_008.png" srcset="../../_images/sphx_glr_demo_denoiser_tour_008.png" alt="demo denoiser tour" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>Denoiser DnCNN (adapted)... done (1.83s)
 </pre></div>
 </div>
 <p>We can see that the adapted denoisers achieve better performances than the original ones,
@@ -954,7 +956,7 @@ but they are still not as good as DRUNet which is trained for a wide range of no
 </div>
 <img src="../../_images/sphx_glr_demo_denoiser_tour_009.png" srcset="../../_images/sphx_glr_demo_denoiser_tour_009.png" alt="$\sigma=0.01$, $\sigma=0.10$" class = "sphx-glr-single-img"/><p>We see that depending on the noise-level, the tadeoff between computation time
 and performances changes, with the deep denoisers performing the best</p>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 29.839 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 22.302 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-basics-demo-denoiser-tour-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/0920b3e4f0fe58999ddff1d37cdee47b/demo_denoiser_tour.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">demo_denoiser_tour.ipynb</span></code></a></p>
