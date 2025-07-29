@@ -120,6 +120,7 @@ class PanNet(nn.Module):
                 padding=1,
             ),
         )
+        self.to(device)
 
     def create_sampler(
         self, direction: str, hr_shape: tuple, noise_gain: float = 0.0

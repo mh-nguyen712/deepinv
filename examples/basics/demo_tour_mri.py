@@ -98,7 +98,7 @@ dinv.utils.plot(
     {
         "x": (x := next(iter(DataLoader(knee_dataset)))),
         "mask": mask,
-        "y": physics(x).clamp(-1, 1),
+        "y": physics(x.to(device)).clamp(-1, 1),
     }
 )
 print("Shapes:", x.shape, physics.mask.shape)
@@ -158,7 +158,7 @@ dinv.utils.plot(
         "coil_map_0": mc_physics.coil_maps.abs()[:, 0, ...],
         "coil_map_1": mc_physics.coil_maps.abs()[:, 1, ...],
         "coil_map_2": mc_physics.coil_maps.abs()[:, 2, ...],
-        "RSS": mc_physics.A_adjoint_A(x, mask=mask, rss=True),
+        "RSS": mc_physics.A_adjoint_A(x.to(device), mask=mask, rss=True),
     }
 )
 
@@ -268,6 +268,7 @@ dataset = dinv.datasets.FastMRISliceDataset(
 )
 
 x, y = next(iter(DataLoader(dataset)))
+x, y = x.to(device), y.to(device)
 
 print("Shapes:", x.shape, y.shape)  # x (B, 1, W, W); y (B, C, N, H, W)
 

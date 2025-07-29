@@ -12,9 +12,12 @@ We also show you how to exploit the singular value decomposition of the operator
 the pseudo-inverse and proximal operators.
 """
 
+# %%
 import deepinv as dinv
 import torch
 
+device = dinv.utils.get_freer_gpu() if torch.cuda.is_available() else "cpu"
+dtype = torch.float32
 # %%
 # Creating a custom forward operator.
 # ----------------------------------------------------------------------------------------
@@ -36,14 +39,15 @@ class Decolorize(dinv.physics.LinearPhysics):
 
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, device=None, dtype=None, **kwargs):
         super().__init__(**kwargs)
         self.noise_model = dinv.physics.GaussianNoise(sigma=0.1)
         # the RGB to grayscale coefficients
-        coefficients = torch.tensor([0.2989, 0.5870, 0.1140], dtype=torch.float32)
+        coefficients = torch.tensor([0.2989, 0.5870, 0.1140])
 
         # register the coefficients as a buffer
         self.register_buffer("coefficients", coefficients)
+        self.to(device=device, dtype=dtype)
 
     def A(self, x, theta=None):  # theta is an optional parameter that is not used here
         y = (
@@ -55,7 +59,7 @@ class Decolorize(dinv.physics.LinearPhysics):
         return y * self.coefficients[None, :, None, None]
 
 
-physics = Decolorize()
+physics = Decolorize(device=device, dtype=dtype)
 
 # %%
 # Generate toy image
@@ -64,7 +68,7 @@ physics = Decolorize()
 # This example uses a toy image with 3 color channels.
 
 
-x = torch.zeros(1, 3, 96, 128)
+x = torch.zeros(1, 3, 96, 128, device=device, dtype=dtype)
 x[:, 0, :32, :] = 1
 x[:, 1, 32:64, :] = 1
 x[:, 2, 64:, :] = 1
@@ -108,15 +112,16 @@ class DecolorizeSVD(dinv.physics.DecomposablePhysics):
 
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, device=None, dtype=None, **kwargs):
         super().__init__(mask=0.447, **kwargs)
         self.noise_model = dinv.physics.GaussianNoise(sigma=0.1)
 
         # the RGB to grayscale coefficients
-        coefficients = torch.tensor([0.6687, 1.3132, 0.2550], dtype=torch.float32)
+        coefficients = torch.tensor([0.6687, 1.3132, 0.2550])
 
         # register the coefficients as a buffer
         self.register_buffer("coefficients", coefficients)
+        self.to(device=device, dtype=dtype)
 
     def V_adjoint(self, x):
         y = x * self.coefficients[None, :, None, None]
@@ -126,7 +131,7 @@ class DecolorizeSVD(dinv.physics.DecomposablePhysics):
         return y * self.coefficients[None, :, None, None]
 
 
-physics2 = DecolorizeSVD()
+physics2 = DecolorizeSVD(device=device, dtype=dtype)
 
 y2 = physics2(x)
 xlin2 = physics.A_dagger(y2)  # compute the linear pseudo-inverse
@@ -155,19 +160,21 @@ if physics.adjointness_test(x) < 1e-5:
 import time
 
 start = time.time()
+torch.cuda.synchronize()  # synchronize the GPU before starting the timer
 for i in range(10):
     xlin = physics.A_dagger(y)
     xprox = physics.prox_l2(x, y, 0.1)
 
+torch.cuda.synchronize()  # synchronize the GPU after the computation
 end = time.time()
 print(f"Elapsed time for LinearPhysics: {end - start:.2f} seconds")
 
 start = time.time()
+torch.cuda.synchronize()
 for i in range(10):
     xlin2 = physics2.A_dagger(y)
     xprox2 = physics2.prox_l2(x, y2, 0.1)
 
+torch.cuda.synchronize()
 end = time.time()
 print(f"Elapsed time for DecomposablePhysics: {end - start:.2e} seconds")
-
-# %%

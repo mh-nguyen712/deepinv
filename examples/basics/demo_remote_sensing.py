@@ -29,6 +29,7 @@ which includes data from several satellites such as WorldView satellites.
 
 """
 
+# %%
 import deepinv as dinv
 import torch
 
@@ -51,12 +52,13 @@ import torch
 # Note also that the linear adjoint must assume the unknown spectral response function (SRF).
 #
 
+device = dinv.utils.get_freer_gpu() if torch.cuda.is_available() else "cpu"
 DATA_DIR = dinv.utils.get_data_home()
 dataset = dinv.datasets.NBUDataset(DATA_DIR, return_pan=True, download=True)
 
-y = dataset[0].unsqueeze(0)  # MS (1,4,256,256), PAN (1,1,1024,1024)
+y = dataset[0].unsqueeze(0).to(device=device)  # MS (1,4,256,256), PAN (1,1,1024,1024)
 
-physics = dinv.physics.Pansharpen((4, 1024, 1024), factor=4)
+physics = dinv.physics.Pansharpen((4, 1024, 1024), factor=4, device=device)
 
 # Pansharpen with classical Brovey method
 x_hat = physics.A_dagger(y)  # shape (1,4,1024,1024)
@@ -94,14 +96,14 @@ print(qnr(x_net=x_hat, x=None, y=y, physics=physics))
 
 dataset = dinv.datasets.NBUDataset(DATA_DIR, return_pan=False)
 
-x = dataset[0].unsqueeze(0)  # just MS of shape 1,4,256,256
+x = dataset[0].unsqueeze(0).to(device)  # just MS of shape 1,4,256,256
 
 # %%
 # For **compressive spectral imaging**, we use the coded-aperture snapshot spectral imaging (CASSI) model,
 # which is a popular hyperspectral imaging method. See :class:`deepinv.physics.CompressiveSpectralImaging`
 #
 
-physics = dinv.physics.CompressiveSpectralImaging(x.shape[1:], mode="sd")
+physics = dinv.physics.CompressiveSpectralImaging(x.shape[1:], mode="sd", device=device)
 y = physics(x)  # 1,1,256,256
 dinv.utils.plot([x[:, :3], y], titles=["Image x", "CASSI meas. y"])
 
@@ -112,7 +114,8 @@ dinv.utils.plot([x[:, :3], y], titles=["Image x", "CASSI meas. y"])
 #
 
 physics = dinv.physics.HyperSpectralUnmixing(
-    M=torch.tensor([[0.5, 0.5, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]])
+    M=torch.tensor([[0.5, 0.5, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]),
+    device=device,
 )
 abundance = physics.A_adjoint(x)  # 1,2,256,256
 dinv.utils.plot(
@@ -125,7 +128,7 @@ dinv.utils.plot(
 # but this can also be jointly learned. We simulate Gaussian noise on the panchromatic images.
 #
 
-physics = dinv.physics.Pansharpen((4, 256, 256), factor=4, srf="flat")
+physics = dinv.physics.Pansharpen((4, 256, 256), factor=4, srf="flat", device=device)
 
 y = physics(x)
 
@@ -150,7 +153,7 @@ x_hat = physics.A_dagger(y)
 #   This is a tiny example using 5 images. We demonstrate training for 1 epoch for speed, but you can train from scratch using 50 epochs.
 #
 
-model = dinv.models.PanNet(hrms_shape=(4, 256, 256))
+model = dinv.models.PanNet(hrms_shape=(4, 256, 256), device=device)
 x_net = model(y, physics)
 
 # %%
