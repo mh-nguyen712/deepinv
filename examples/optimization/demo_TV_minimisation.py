@@ -8,6 +8,7 @@ to recover the original image :math:`x` from the blurred and noisy image :math:`
 the problem.
 """
 
+# %%
 import deepinv as dinv
 from pathlib import Path
 import torch

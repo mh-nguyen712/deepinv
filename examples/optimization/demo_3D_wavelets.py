@@ -10,7 +10,6 @@ bases, which does not admit a closed-form solution. We solve the denoising probl
 import deepinv as dinv
 from pathlib import Path
 import numpy as np
-import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
@@ -47,6 +46,7 @@ volume_data = load_np_url(
 volume_data = np.copy(volume_data[::-1, ...])
 volume_data = torch.from_numpy(volume_data).unsqueeze(0).unsqueeze(0)
 x = volume_data / volume_data.max()
+x = x.to(device)
 
 noise_level_img = 0.1  # Gaussian Noise standard deviation for the degradation
 physics = dinv.physics.GaussianNoise(sigma=noise_level_img)
