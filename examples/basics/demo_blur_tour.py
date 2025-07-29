@@ -6,7 +6,6 @@ This example provides a tour of 2D blur operators in DeepInv.
 In particular, we show how to use DiffractionBlurs (Fresnel diffraction), motion blurs and space varying blurs.
 
 """
-
 import torch
 
 import deepinv as dinv
@@ -20,7 +19,7 @@ from deepinv.utils.demo import load_example
 # First, let's load some test images.
 
 dtype = torch.float32
-device = "cpu"
+device = dinv.utils.get_freer_gpu() if torch.cuda.is_available() else torch.device("cpu")
 img_size = (173, 125)
 
 x_rgb = load_example(
@@ -218,7 +217,7 @@ plot(
 n_zernike = len(
     diffraction_generator.list_param
 )  # number of Zernike coefficients in the decomposition
-filters = diffraction_generator.step(coeff=torch.zeros(3, n_zernike))
+filters = diffraction_generator.step(coeff=torch.zeros(3, n_zernike, device=device, dtype=dtype))
 plot(
     [f for f in filters["filter"][:, None] ** 0.3],
     suptitle="Airy pattern",
@@ -289,12 +288,14 @@ pc_generator = ProductConvolutionBlurGenerator(
     n_eigen_psf=n_eigenpsf,
     spacing=spacing,
     padding=padding,
+    device=device,
+    dtype=dtype,
 )
 params_pc = pc_generator.step(batch_size)
 
-physics = SpaceVaryingBlur(method="product_convolution2d", **params_pc)
+physics = SpaceVaryingBlur(method="product_convolution2d", **params_pc, device=device, dtype=dtype)
 
-dirac_comb = torch.zeros(img_size)[None, None]
+dirac_comb = torch.zeros(1, 1, *img_size, device=device, dtype=dtype)
 dirac_comb[0, 0, ::delta, ::delta] = 1
 psf_grid = physics(dirac_comb)
 plot(psf_grid, titles="Space varying impulse responses")

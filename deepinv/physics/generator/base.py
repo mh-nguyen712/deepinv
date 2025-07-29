@@ -74,7 +74,7 @@ class PhysicsGenerator(nn.Module):
                 device
             ), f"The random generator is not on the same device as the Physics Generator. Got random generator on {rng.device} and the Physics Generator named {self.__class__.__name__} on {self.device}."
             self.rng = rng
-        self.register_buffer("initial_random_state", self.rng.get_state().to(device))
+        self.register_buffer("initial_random_state", self.rng.get_state())
 
         # Set attributes
         for k, v in kwargs.items():
