@@ -825,6 +825,7 @@ class SwinIR(Denoiser):
         See :ref:`pretrained-weights <pretrained-weights>` for more details.
     :param int pretrained_noise_level: The noise level of the pretrained model to be downloaded (in 0-255 scale). This
         value is directly concatenated to the download url; should be chosen in the set {15, 25, 50}. Default: 15.
+    :param torch.device device: Device to use for the model. Default: None, which uses CPU
     """
 
     def __init__(
@@ -852,6 +853,7 @@ class SwinIR(Denoiser):
         resi_connection="1conv",
         pretrained="download",
         pretrained_noise_level=15,
+        device=None,
         **kwargs,
     ):
         if isinstance(timm, ImportError):
@@ -1039,6 +1041,9 @@ class SwinIR(Denoiser):
 
             self.load_state_dict(pretrained_weights, strict=True)
             self.eval()
+
+        if device is not None:
+            self.to(device)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
