@@ -1,3 +1,4 @@
+# %%
 r"""
 A tour of blur operators
 ===================================================
@@ -19,8 +20,8 @@ from deepinv.utils.demo import load_example
 #
 # First, let's load some test images.
 
-dtype = torch.float32
-device = "cpu"
+dtype = torch.float64
+device = dinv.utils.get_freer_gpu()
 img_size = (173, 125)
 
 x_rgb = load_example(
@@ -44,8 +45,8 @@ torch.cuda.manual_seed(0)
 # The class :class:`deepinv.physics.Blur` implements convolution operations with kernels.
 #
 # For instance, here is the convolution of a grayscale image with a grayscale filter:
-filter_0 = dinv.physics.blur.gaussian_blur(sigma=(2, 0.1), angle=0.0)
-physics = dinv.physics.Blur(filter_0, device=device)
+filter_0 = dinv.physics.blur.gaussian_blur(sigma=(2, 0.1), angle=0.0).to(device=device, dtype=dtype)
+physics = dinv.physics.Blur(filter_0, device=device, dtype=dtype)
 y = physics(x_gray)
 plot(
     [x_gray, filter_0, y],
@@ -57,7 +58,7 @@ plot(
 # When a single channel filter is used, all channels are convolved with the same filter:
 #
 
-physics = dinv.physics.Blur(filter_0, device=device)
+physics = dinv.physics.Blur(filter_0, device=device, dtype=dtype)
 y = physics(x_rgb)
 plot(
     [x_rgb, filter_0, y],
@@ -69,7 +70,7 @@ plot(
 # By default, the boundary conditions are ``'valid'``, but other options among (``'circular'``, ``'reflect'``, ``'replicate'``) are possible:
 #
 
-physics = dinv.physics.Blur(filter_0, padding="reflect", device=device)
+physics = dinv.physics.Blur(filter_0, padding="reflect", device=device, dtype=dtype)
 y = physics(x_rgb)
 plot(
     [x_rgb, filter_0, y],
@@ -81,7 +82,7 @@ plot(
 # For circular boundary conditions, an FFT implementation is also available. It is slower that :class:`deepinv.physics.Blur`,
 # but inherits from :class:`deepinv.physics.DecomposablePhysics`, so that the pseudo-inverse and regularized inverse are computed faster and more accurately.
 #
-physics = dinv.physics.BlurFFT(img_size=x_rgb[0].shape, filter=filter_0, device=device)
+physics = dinv.physics.BlurFFT(img_size=x_rgb[0].shape, filter=filter_0, device=device, dtype=dtype)
 y = physics(x_rgb)
 plot(
     [x_rgb, filter_0, y],
@@ -218,7 +219,7 @@ plot(
 n_zernike = len(
     diffraction_generator.list_param
 )  # number of Zernike coefficients in the decomposition
-filters = diffraction_generator.step(coeff=torch.zeros(3, n_zernike))
+filters = diffraction_generator.step(coeff=torch.zeros(3, n_zernike, device=device, dtype=dtype))
 plot(
     [f for f in filters["filter"][:, None] ** 0.3],
     suptitle="Airy pattern",
@@ -270,13 +271,13 @@ from deepinv.physics.generator import (
 )
 from deepinv.physics.blur import SpaceVaryingBlur
 
-psf_size = 32
+psf_size = 31
 img_size = (256, 256)
-n_eigenpsf = 10
+n_eigenpsf = 2
 spacing = (64, 64)
 padding = "valid"
 batch_size = 1
-delta = 16
+delta = 64
 
 # We first instantiate a psf generator
 psf_generator = DiffractionBlurGenerator(
@@ -289,12 +290,15 @@ pc_generator = ProductConvolutionBlurGenerator(
     n_eigen_psf=n_eigenpsf,
     spacing=spacing,
     padding=padding,
+    device=device,
+    dtype=dtype
 )
 params_pc = pc_generator.step(batch_size)
 
-physics = SpaceVaryingBlur(**params_pc)
+physics = SpaceVaryingBlur(**params_pc, device=device, dtype=dtype)
 
-dirac_comb = torch.zeros(img_size)[None, None]
+dirac_comb = torch.zeros(img_size, device=device, dtype=dtype)[None, None]
 dirac_comb[0, 0, ::delta, ::delta] = 1
 psf_grid = physics(dirac_comb)
-plot(psf_grid, titles="Space varying impulse responses")
+plot(psf_grid, titles="Space varying impulse responses", figsize=(10,10))
+plot([_ for _ in physics.filters.transpose(1,2).flatten(0,1)], suptitle="Kernels")

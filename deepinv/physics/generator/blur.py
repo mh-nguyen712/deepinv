@@ -661,6 +661,8 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
 
         # Generating psf_grid on a grid
         psf_grid = self.psf_generator.step(self.n_psf_prid * batch_size)["filter"]
+        import deepinv as dinv
+        dinv.utils.plot(psf_grid)
         psf_size = psf_grid.shape[-2:]
         psf_grid = psf_grid.view(
             batch_size, self.n_psf_prid, psf_grid.size(1), *psf_size
