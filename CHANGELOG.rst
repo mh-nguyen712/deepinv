@@ -29,6 +29,7 @@ Changed
 - Make autograd use the base linear operator for `deepinv.physics.adjoint_function` (:gh:`519` by `Jérémy Scanvic`_)
 - Parallelize the test suite making it 15% faster (:gh:`522` by `Jérémy Scanvic`_)
 - Adjust backward paths for tomography (:gh:`535` by `Johannes Hertrich`_)
+- Update python version to 3.10+ (:gh:`605` by `Minh Hai Nguyen`_)
 
 Fixed
 ^^^^^
@@ -36,9 +37,8 @@ Fixed
 - Fix the gradient norm reported by the trainer (:gh:`520` by `Jérémy Scanvic`_)
 - Fix that the max_pixel option in PSNR and SSIM and add analgous min_pixel option (:gh:`535` by `Johannes Hertrich`_)
 - Fix some issues related to denoisers: ICNN grad not working inside torch.no_grad(), batch of image and batch of sigma for some denoisers (DiffUNet, BM3D, TV, Wavemet), EPLL error when batch size > 1 (:gh:`530` by `Minh Hai Nguyen`_)  
-- Batching WaveletPrior and fix iwt(:gh:`530` by `Minh Hai Nguyen`_)
-
-  
+- Batching WaveletPrior and fix iwt (:gh:`530` by `Minh Hai Nguyen`_)
+- Fix on unreliable/inconsistent automatic choosing GPU with most free VRAM (:gh:`570` by `Fedor Goncharov`_)
 
 v0.3.1
 ----------------
@@ -125,6 +125,7 @@ Fixed
 
 Changed
 ^^^^^^^
+- Add bibtex references (:gh:`575` by `Samuel Hurault`_)
 - Set sphinx warnings as errors (:gh:`379` by `Julian Tachella`_)
 - Added single backquotes default to code mode in docs (:gh:`379` by `Julian Tachella`_)
 - Changed the __add__ method for stack method for stacking physics (:gh:`371` by `Julian Tachella`_ and `Andrew Wang`_)
