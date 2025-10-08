@@ -15,8 +15,14 @@ from deepinv.physics.functional import (
     conv3d_fft,
     conv_transpose3d_fft,
     imresize_matlab,
+    product_convolution2d_patches,
+    product_convolution2d_adjoint_patches,
+    get_psf_pconv2d_eigen,
+    get_psf_pconv2d_patch,
 )
+from deepinv.physics.functional.product_convolution import compute_patch_info
 
+import warnings
 
 class Downsampling(LinearPhysics):
     r"""
@@ -568,15 +574,35 @@ class SpaceVaryingBlur(LinearPhysics):
         filters: Tensor = None,
         multipliers: Tensor = None,
         padding: str = "valid",
+        method: str = "eigen_psf",
+        patch_size: tuple[int] = None,
+        overlap: tuple[int] = None,
+        img_size: tuple[int] = None,
+        spacing: tuple[int] = None,
         device="cpu",
         **kwargs,
     ):
         super().__init__(**kwargs)
+        assert method in ["eigen_psf", "tiled_psf"], f"Method {method} not recognized."
+        if method == "tiled_psf":
+            self.patch_size = patch_size
+            self.overlap = overlap
+            self.spacing = spacing
+        self.method = method
+        self.img_size = img_size
+        
         self.update_parameters(filters, multipliers, padding, **kwargs)
         self.to(device)
 
     def A(
-        self, x: Tensor, filters=None, multipliers=None, padding=None, **kwargs
+        self, x: Tensor, 
+        filters=None, 
+        multipliers=None, 
+        padding=None, 
+        img_size: tuple[int] = None,
+        patch_size: tuple[int] = None,
+        overlap: tuple[int] = None,
+        **kwargs
     ) -> torch.Tensor:
         r"""
         Applies the space varying blur operator to the input image.
@@ -592,10 +618,38 @@ class SpaceVaryingBlur(LinearPhysics):
         :param str device: cpu or cuda
         """
         self.update_parameters(filters, multipliers, padding, **kwargs)
-        return product_convolution2d(x, self.multipliers, self.filters, self.padding)
+        if self.method == "eigen_psf":
+            return product_convolution2d(x, self.multipliers, self.filters, self.padding)
+        elif self.method == "tiled_psf":
+            if patch_size is not None:
+                self.patch_size = patch_size
+            if overlap is not None:
+                self.overlap = overlap
+            if img_size is not None:
+                self.img_size = img_size
+
+            if tuple(x.shape[-2:]) != self.img_size:
+                self.img_size = tuple(x.shape[-2:])
+            self.update_patch_info(self.img_size, self.patch_size, self.overlap)
+            self.check_patch_info()
+            return product_convolution2d_patches(
+                x,
+                w=self.multipliers,
+                h=self.filters,
+                patch_size=self.patch_size,
+                overlap=self.overlap,
+            )
+
 
     def A_adjoint(
-        self, y: Tensor, filters=None, multipliers=None, padding=None, **kwargs
+        self, y: Tensor, 
+        filters=None,
+        multipliers=None, 
+        padding=None,
+        img_size: tuple[int] = None,
+        patch_size: tuple[int] = None,
+        overlap: tuple[int] = None,
+        **kwargs
     ) -> torch.Tensor:
         r"""
         Applies the adjoint operator.
@@ -613,15 +667,37 @@ class SpaceVaryingBlur(LinearPhysics):
         self.update_parameters(
             filters=filters, multipliers=multipliers, padding=padding, **kwargs
         )
-        return product_convolution2d_adjoint(
-            y, self.multipliers, self.filters, self.padding
-        )
+        if self.method == "product_convolution2d":
+            self.update_parameters(filters, multipliers, padding)
+
+            return product_convolution2d_adjoint(
+                y, self.multipliers, self.filters, self.padding
+            )
+        elif self.method == "product_convolution2d_patch":
+            if patch_size is not None:
+                self.patch_size = patch_size
+            if overlap is not None:
+                self.overlap = overlap
+            if img_size is not None:
+                self.img_size = img_size
+
+            self.update_patch_info(self.img_size, self.patch_size, self.overlap)
+            self.check_patch_info()
+
+            return product_convolution2d_adjoint_patches(
+                y,
+                w=self.multipliers,
+                h=self.filters,
+                patch_size=self.patch_size,
+                overlap=self.overlap,
+            )
 
     def update_parameters(
         self,
         filters: Tensor = None,
         multipliers: Tensor = None,
         padding: str = None,
+        img_size: tuple[int] = None,
         **kwargs,
     ):
         r"""
@@ -637,7 +713,86 @@ class SpaceVaryingBlur(LinearPhysics):
             self.register_buffer("multipliers", multipliers)
         if padding is not None:
             self.padding = padding
+        if img_size is not None:
+            self.img_size = img_size
         super().update_parameters(**kwargs)
+        
+        
+    def get_psf(
+        self,
+        centers: Tensor = None,
+        patch_size: tuple[int] = None,
+        overlap: tuple[int] = None,
+        **kwargs,
+    ):
+        r"""
+        :param torch.Tensor centers: (B, num_center_per_batch, 2)
+        :return: (B, C, num_center_per_batch, psf_size, psf_size)
+        """
+        self.update_parameters(**kwargs)
+        h = self.filters
+        w = self.multipliers
+        if isinstance(centers, (tuple, list)):
+            centers = torch.tensor(centers, device=self.device)[None, None]
+
+        if self.method == "tiled_psf":
+            if patch_size is not None:
+                self.patch_size = patch_size
+            if overlap is not None:
+                self.overlap = overlap
+            self.update_patch_info(self.image_size, self.patch_size, self.overlap)
+            self.check_patch_info()
+            # Clipping the center to valid locations
+            centers[..., 0].clamp_(
+                min=self.patch_size[0] // 2,
+                max=self.max_image_size[0] - self.patch_size[0] // 2,
+            )
+            centers[..., 1].clamp_(
+                min=self.patch_size[1] // 2,
+                max=self.max_image_size[1] - self.patch_size[1] // 2,
+            )
+
+            psf = get_psf_pconv2d_patch(
+                h, w, centers, overlap=self.overlap, num_patches=self.num_patches
+            )
+        elif self.method == "eigen_psf":
+            psf = get_psf_pconv2d_eigen(h, w, centers)
+        return psf
+    
+    def update_patch_info(self, image_size, patch_size, overlap):
+        if isinstance(image_size, int):
+            image_size = (image_size, image_size)
+        if isinstance(patch_size, int):
+            patch_size = (patch_size, patch_size)
+        if isinstance(overlap, int):
+            overlap = (overlap, overlap)
+
+        self.image_size = image_size
+        self.patch_size = patch_size
+        self.overlap = overlap
+        info = compute_patch_info(self.image_size, self.patch_size, self.overlap)
+        self.num_patches = info["num_patches"]
+        if info["max_size"][0] < self.image_size[0] or info["max_size"][1] < self.image_size[1]:
+            better_overlap = (
+                int(
+                    (self.num_patches[0] * self.patch_size[0] - self.image_size[0])
+                    / (self.num_patches[0] - 1)
+                ),
+                int(
+                    (self.num_patches[1] * self.patch_size[1] - self.image_size[1])
+                    / (self.num_patches[1] - 1)
+                ),
+            )
+            warnings.warn(
+                f"The patch size and overlap do not cover the whole image. The input image will be cropped. Use can use overlap = {better_overlap}"
+            )
+        self.max_image_size = info["max_size"]
+
+    def check_patch_info(self):
+        if self.patch_size is None or self.overlap is None:
+            raise ValueError(
+                "Patch information is required for product_convolution2d_patch method. Please specify the patch_size and overlap"
+            )
 
 
 def gaussian_blur(sigma=(1, 1), angle=0, device="cpu"):

@@ -6,7 +6,7 @@ from .blur import (
     ProductConvolutionBlurGenerator,
     DiffractionBlurGenerator3D,
     ConfocalBlurGenerator3D,
-    bump_function,
+    
 )
 from .mri import (
     BaseMaskGenerator,

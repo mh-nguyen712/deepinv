@@ -10,7 +10,15 @@ from .convolution import (
     conv_transpose3d_fft,
 )
 
-from .product_convolution import product_convolution2d, product_convolution2d_adjoint
+from .product_convolution import (
+    product_convolution2d,
+    product_convolution2d_adjoint,
+    product_convolution2d_adjoint,
+    product_convolution2d_patches,
+    product_convolution2d_adjoint_patches,
+    get_psf_pconv2d_patch,
+    get_psf_pconv2d_eigen,
+)
 
 from .multiplier import (
     multiplier,
@@ -24,3 +32,4 @@ from .rand import random_choice
 from .dst import dst1
 from .astra import XrayTransform
 from .imresize import imresize_matlab
+from .utils import bump_function
