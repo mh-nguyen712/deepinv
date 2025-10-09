@@ -681,13 +681,13 @@ class SpaceVaryingBlur(LinearPhysics):
         self.update_parameters(
             filters=filters, multipliers=multipliers, padding=padding, **kwargs
         )
-        if self.method == "product_convolution2d":
+        if self.method == "eigen_psf":
             self.update_parameters(filters, multipliers, padding)
 
             return product_convolution2d_adjoint(
                 y, self.multipliers, self.filters, self.padding
             )
-        elif self.method == "product_convolution2d_patch":
+        elif self.method == "tiled_psf":
             if patch_size is not None:
                 self.patch_size = patch_size
             if overlap is not None:
