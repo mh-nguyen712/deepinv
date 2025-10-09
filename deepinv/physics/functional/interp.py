@@ -76,8 +76,9 @@ class ThinPlateSpline:
 
     Attrs:
         alpha (float): Regularization parameter
-        parameters (Tensor): All the parameters (P). Shape: :math:`(n_c + d_s + 1, d_t)`
-        control_points (Tensor): Control points fitted (X_c). Shape: :math:`(n_c, d_s)`
+        parameters (Tensor): All the parameters (P). Shape: :math:`(n_c + d_s + 1, d_t)` (batched over optional leading dims :math:`(B, C, \cdot, \cdot)`)
+        control_points (Tensor): Control points fitted (X_c).
+            Shape: :math:`(n_c, d_s)` or batched :math:`(B, 1, n_c, d_s)` / :math:`(B, C, n_c, d_s)` depending on inputs
     """
 
     def __init__(self, alpha=0.0, device="cpu", dtype=torch.float32) -> None:
@@ -94,9 +95,15 @@ class ThinPlateSpline:
 
         Args:
             X (Tensor): Control point at source space (X_c)
-                Shape: (n_c, d_s)
+                Accepted shapes:
+                - (n_c, d_s)
+                - (B, n_c, d_s)
+                - (B, C, n_c, d_s)
             Y (Tensor): Control point in the target space (X_t)
-                Shape: (B, C, n_c, d_t)
+                Accepted shapes:
+                - (n_c, d_t)
+                - (B, n_c, d_t)
+                - (B, C, n_c, d_t)
 
         Returns:
             ThinPlateSpline: self
@@ -167,11 +174,14 @@ class ThinPlateSpline:
 
         Args:
             X (Tensor): Points in the source space
-                Shape: (n, d_s)
+                Accepted shapes:
+                - (n, d_s)
+                - (B, n, d_s)
+                - (B, C, n, d_s)
 
         Returns:
             Tensor: Mapped points in the target space
-                Shape: (n, d_t)
+                Shape: (n, d_t) or batched: (B, 1, n, d_t) / (B, C, n, d_t)
         """
         assert self._fitted, "Please call fit first."
 
@@ -209,13 +219,17 @@ class ThinPlateSpline:
 
 
 def _ensure_batched_2d(tensor: torch.Tensor) -> torch.Tensor:
-    r"""Ensure that tensor is a 2d tensor
+    r"""Normalize tensor to a 4D batched shape (B, C, N, D).
 
-    In case of 1d tensor, let's expand the last dim
+    Accepted input ranks and interpretations:
+    - 2D: (N, D) -> becomes (1, 1, N, D)
+    - 3D: (B, N, D) -> becomes (B, 1, N, D)
+    - 4D: (B, C, N, D) -> unchanged
     """
-    assert tensor.ndim in (2, 4)
-
-    # Expand first 2 dim in order to interpret this as (B, C, ..., ...) points
     if tensor.ndim == 2:
-        tensor = tensor[None, None]
-    return tensor
+        return tensor[None, None]
+    if tensor.ndim == 3:
+        return tensor[:, None]
+    if tensor.ndim == 4:
+        return tensor
+    raise AssertionError("Expected tensor with 2, 3, or 4 dims, got %d" % tensor.ndim)
