@@ -411,6 +411,27 @@ for i in range(16):
         figsize=(5, 5),
     )
 # %%
-print(psf_grid_eigen.shape)
-print(dirac_comb.shape)
-# %%
+generator = ProductConvolutionBlurGenerator(
+    img_size=img_size,
+    patch_size=patch_size,
+    method="eigen_psf",
+    device=device,
+)
+params = generator.step_from_psfs(psfs=psf_list, psf_centers=centers / img_size )
+
+physics = SpaceVaryingBlur(**params, device=device)
+
+for i in range(16):
+    dirac_comb = torch.zeros((1, 1, img_size, img_size), device=device)
+    dirac_comb[0, 0, i::8, ::8] = 1
+    psf_grid_eigen = physics(dirac_comb)
+    psf_grid_eigen = F.pad(psf_grid_eigen, (2, 2, 2, 2))
+
+    plot(
+        [dirac_comb, psf_grid_eigen.abs() ** 0.5],
+        titles=["Dirac comb", "Impulse responses"],
+        suptitle="Space varying impulse responses -- Eigen",
+        rescale_mode="min_max",
+        cbar=True,
+        figsize=(5, 5),
+    )

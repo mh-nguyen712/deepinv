@@ -108,8 +108,8 @@ class ThinPlateSpline:
         Returns:
             ThinPlateSpline: self
         """
-        X = X.to(self.device)
-        Y = Y.to(self.device)
+        X = X.to(self.device, dtype=self.dtype)
+        Y = Y.to(self.device, dtype=self.dtype)
         X = _ensure_batched_2d(X)
         Y = _ensure_batched_2d(Y)
 
