@@ -4,7 +4,6 @@ from math import ceil, floor
 from deepinv.physics.functional.product_convolution import (
     crop_unity_partition_2d,
     unity_partition_function_2d,
-    compute_patch_info,
 )
 from deepinv.physics.generator import PhysicsGenerator
 from deepinv.physics.functional import histogramdd, conv2d, bump_function
@@ -582,9 +581,9 @@ class EigenPSFConstructor(nn.Module):
             self.n_eigen_psf = n_eigen_psf
 
             self.n_psf = (img_size[0] // spacing[0]) * (img_size[1] // spacing[1])
-            if self.n_psf >= n_eigen_psf:
+            if (n_eigen_psf is not None) and (n_eigen_psf > self.n_psf):
                 warnings.warn(
-                    f"Number of eigen-PSFs n_eigen_psf={n_eigen_psf} is greater than the number of PSFs = {self.n_psf}. It is set to n_eigen_psf = {self.n_psf}."
+                    f"Number of eigen-PSFs n_eigen_psf={n_eigen_psf} is greater than the number of PSFs = {self.n_psf}. Setting n_eigen_psf = {self.n_psf}."
                 )
                 n_eigen_psf = self.n_psf
             self.n_eigen_psf = n_eigen_psf
@@ -629,45 +628,95 @@ class EigenPSFConstructor(nn.Module):
         n_eigen_psf: int = None,
     ) -> tuple[Tensor, Tensor]:
         r"""
-        Construct the eigen PSF interpolation operator metadata.
-
-        :param torch.Tensor psfs: tensor of shape `(B, C, n_psf_grid, psf_size[0], psf_size[1])` with the PSFs.
-        :param torch.Tensor psf_centers: tensor of shape `(n_psf_grid, 2)` with the normalized coordinates of the given PSF centers.
+        Deprecated: use construct_from_psf(psfs, centers, img_size, n_eigen_psf) instead.
         """
-        assert (
-            psfs.ndim == 5
-        ), f"psfs must be 5D tensor of shape (B, C, n_psf, psf_size[0], psf_size[1]), got {psfs.shape}"
-        c, h, w = psfs.shape[-3:]
+        warnings.warn(
+            "EigenPSFConstructor.construct_operator_metadata is deprecated; use construct_from_psf instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        # If pixel_centers is given, still honor img_size; otherwise, build grid internally
+        return self.construct_from_psf(
+            psfs=psfs,
+            centers=psf_centers,
+            img_size=img_size,
+            n_eigen_psf=n_eigen_psf,
+        )
 
+    def construct_from_psf(
+        self,
+        psfs: Tensor,
+        centers: Tensor,
+        img_size: tuple[int, ...] | None = None,
+        n_eigen_psf: int | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        """
+        Construct eigen-PSF operator metadata from provided PSFs and their centers.
+
+        - psfs may be shaped (B, n_psf, C, psf_h, psf_w) or (B, C, n_psf, psf_h, psf_w)
+        - centers is (n_psf, 2) in [0,1]^2
+        Returns: (filters, multipliers) shaped (B,C,K,Hk,Wk) and (B,C,K,H,W)
+        """
+        assert psfs.ndim == 5, (
+            "psfs must be a 5D tensor of shape (B, n_psf, C, psf_h, psf_w) or (B, C, n_psf, psf_h, psf_w), "
+            f"got {psfs.shape}"
+        )
+
+        # Normalize layout to (B, n_psf, C, H, W)
+        n_psf = centers.shape[0]
+        if psfs.shape[1] != n_psf and psfs.shape[2] == n_psf:
+            psfs = psfs.transpose(1, 2)
+
+        c, h, w = psfs.shape[-3:]
         img_size = img_size if img_size is not None else self.img_size
         n_eigen_psf = n_eigen_psf if n_eigen_psf is not None else self.n_eigen_psf
-
         assert (
             n_eigen_psf is not None
-        ), "n_eigen_psf must be given either at initialization or at each call of construct_operator_metadata."
+        ), "n_eigen_psf must be given either at initialization or at each call of construct_from_psf."
 
-        # Computing the eigen-psf
-        psfs = psfs.flatten(-2, -1).transpose(
-            1, 2
-        )  # B x C x n_psf x (psf_size * psf_size)
-        _, _, VT = torch.linalg.svd(psfs, full_matrices=False)
+        # Build pixel grid points over the image domain in [0,1]^2
+        H, W = img_size
+        th = torch.linspace(0, 1, H, device=self.device, dtype=self.dtype)
+        tw = torch.linspace(0, 1, W, device=self.device, dtype=self.dtype)
+        yy, xx = torch.meshgrid(th, tw, indexing="ij")
+        pixel_grid = torch.stack((yy.flatten(), xx.flatten()), dim=1)
 
+        # Computing the eigen-PSFs: build matrices (n_psf x L) per (B,C)
+        psfs_mat = psfs.flatten(-2, -1).transpose(1, 2)  # (B, C, n_psf, L)
+        _, _, VT = torch.linalg.svd(psfs_mat, full_matrices=False)
         n_eigen_chosen = min(n_eigen_psf, VT.size(-2))
-
-        VT = VT[..., :n_eigen_chosen, :]  # B x C x n_eigen_psf x (psf_size*psf_size)
-        coeffs = torch.matmul(
-            psfs, VT.transpose(-1, -2)
-        )  # B x C x n_psf_grid x n_eigen_psf
+        VT = VT[..., :n_eigen_chosen, :]  # (B, C, K, L)
+        coeffs = torch.matmul(psfs_mat, VT.transpose(-1, -2))  # (B, C, n_psf, K)
         eigen_psf = VT.reshape(VT.size(0), c, n_eigen_chosen, h, w)
 
         # compute multipliers by interpolating the coeffs with thin-plate splines
-        self.tps.fit(psf_centers, coeffs)
-        multipliers = self.tps.transform(pixel_centers).transpose(-1, -2)
-        multipliers = multipliers.reshape(
-            multipliers.size(0), c, n_eigen_chosen, *self.img_size
-        )
+        self.tps.fit(centers, coeffs)
+        multipliers = self.tps.transform(pixel_grid).transpose(-1, -2)
+        multipliers = multipliers.reshape(multipliers.size(0), c, n_eigen_chosen, H, W)
 
         return eigen_psf, multipliers
+
+    def construct_from_psfs(
+        self,
+        psfs: Tensor,
+        psf_centers: Tensor,
+        img_size: tuple[int, ...] | None = None,
+        n_eigen_psf: int | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        """
+        Deprecated alias for construct_from_psf.
+        """
+        warnings.warn(
+            "construct_from_psfs is deprecated; use construct_from_psf instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.construct_from_psf(
+            psfs=psfs,
+            centers=psf_centers,
+            img_size=img_size,
+            n_eigen_psf=n_eigen_psf,
+        )
 
 
 class TiledPSFConstructor(nn.Module):
@@ -741,7 +790,26 @@ class TiledPSFConstructor(nn.Module):
         patch_size: tuple[int, ...] = None,
         overlap: tuple[int, ...] = None,
     ) -> tuple[Tensor, Tensor, tuple[int, int]]:
+        warnings.warn(
+            "TiledPSFConstructor.construct_operator_metadata is deprecated; use construct_from_psf instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        filters, mult = self.construct_from_psf(psfs, img_size, patch_size, overlap)
+        return filters, mult
 
+    def construct_from_psf(
+        self,
+        psfs: Tensor,
+        img_size: tuple[int, ...] = None,
+        patch_size: tuple[int, ...] = None,
+        overlap: tuple[int, ...] = None,
+    ) -> tuple[Tensor, Tensor]:
+        """
+        Construct tiled operator metadata (uniform partition multipliers) from provided PSFs.
+
+        Returns: (filters, multipliers) with shapes (B,C,K,Hk,Wk) and (1,1,K,H,W)
+        """
         patch_size = patch_size if patch_size is not None else self.patch_size
         overlap = overlap if overlap is not None else self.overlap
         img_size = img_size if img_size is not None else self.img_size
@@ -754,7 +822,6 @@ class TiledPSFConstructor(nn.Module):
             device=self.device,
             dtype=self.dtype,
         )
-
         return psfs, multiplier
 
 
@@ -879,35 +946,23 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
         self.psf_generator.rng_manual_seed(seed)
 
         if self.method == "eigen_psf":
-            # Generating psf_list on a grid
+            # Generate PSFs on a grid using the underlying PSF generator
             psf_list = self.psf_generator.step(self.n_psf * batch_size)["filter"]
             c, h, w = psf_list.shape[-3:]
-            psf_list = psf_list.view(
-                batch_size, self.n_psf, c, h, w
-            )  # B x n_psf x C x psf_size x psf_size
-            self.register_buffer("psf_list", psf_list)
-
-            if not hasattr(self, "psf_centers") or not hasattr(self, "pixel_grid"):
-                psf_centers, pixel_grid = self.constructor._generate_uniform_grid(
+            psf_list = psf_list.view(batch_size, self.n_psf, c, h, w)
+            # Compute default centers if not provided yet
+            if not hasattr(self, "psf_centers"):
+                centers, _ = self.constructor._generate_uniform_grid(
                     self.img_size, self.spacing, device=self.device, dtype=self.dtype
                 )
-                self.register_buffer("psf_centers", psf_centers)
-                self.register_buffer("pixel_grid", pixel_grid)
-
-            filter, multipliers = self.constructor.construct_operator_metadata(
-                self.psf_list,
-                self.psf_centers,
-                self.pixel_grid,
+                self.register_buffer("psf_centers", centers)
+            # Delegate construction
+            params_blur = self.step_from_psfs(
+                psfs=psf_list,
+                psf_centers=self.psf_centers,
                 img_size=self.img_size,
                 n_eigen_psf=self.n_eigen_psf,
             )
-
-            params_blur = {
-                "filters": filter,
-                "multipliers": multipliers,
-                "method": self.method,
-                "img_size": self.img_size,
-            }
         else:
             params = self.psf_generator.step(
                 batch_size * np.prod(self.constructor.num_patches), **kwargs
@@ -922,26 +977,84 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
                 filters.size(3),
             ).transpose(1, 2)
 
+            # Build metadata via unified pathway
+            params_blur = self.step_from_psfs(
+                psfs=filters,
+                img_size=self.img_size,
+                patch_size=self.patch_size,
+                overlap=self.overlap,
+            )
+            # Cache multiplier for tiled mode to avoid recomputation
             if not hasattr(self, "multiplier"):
-                filters, multiplier = self.constructor.construct_operator_metadata(
-                    filters,
-                    self.img_size,
-                    self.patch_size,
-                    self.overlap,
-                )
-                self.register_buffer("multiplier", multiplier)
-
-            params_blur = {
-                "filters": filters,
-                "multipliers": self.multiplier,
-                "method": self.method,
-                "img_size": self.img_size,
-                "patch_size": self.patch_size,
-                "overlap": self.overlap,
-            }
+                self.register_buffer("multiplier", params_blur["multipliers"])
+            params_blur["multipliers"] = self.multiplier
 
         # Ending
         return params_blur
+
+    def step_from_psfs(
+        self,
+        psfs: Tensor,
+        psf_centers: Tensor | None = None,
+        img_size: tuple[int, ...] | None = None,
+        n_eigen_psf: int | None = None,
+        patch_size: tuple[int, ...] | None = None,
+        overlap: tuple[int, ...] | None = None,
+        **kwargs,
+    ) -> dict:
+        r"""
+        Construct space-varying blur metadata from provided PSFs.
+
+        - For method='eigen_psf', psfs should be (B, n_psf, C, Hk, Wk) or (B, C, n_psf, Hk, Wk), and psf_centers should be (n_psf, 2).
+        - For method='tiled_psf', psfs should be (B, C, K, Hk, Wk).
+
+        Returns: dict with keys 'filters', 'multipliers', 'method', 'img_size', and in tiled mode also 'patch_size', 'overlap'.
+        """
+        if self.method == "eigen_psf":
+            img_size = img_size if img_size is not None else self.img_size
+            # If centers are not provided, fall back to uniform grid implied by spacing
+            if psf_centers is None:
+                if not hasattr(self, "spacing") or self.spacing is None:
+                    raise ValueError(
+                        "psf_centers must be provided when spacing is undefined."
+                    )
+                centers, _ = self.constructor._generate_uniform_grid(
+                    img_size, self.spacing, device=self.device, dtype=self.dtype
+                )
+            else:
+                centers = psf_centers
+
+            filters, multipliers = self.constructor.construct_from_psf(
+                psfs=psfs,
+                centers=centers,
+                img_size=img_size,
+                n_eigen_psf=(self.n_eigen_psf if n_eigen_psf is None else n_eigen_psf),
+            )
+            return {
+                "filters": filters,
+                "multipliers": multipliers,
+                "method": self.method,
+                "img_size": img_size,
+            }
+        else:
+            img_size = img_size if img_size is not None else self.img_size
+            patch_size = patch_size if patch_size is not None else self.patch_size
+            overlap = overlap if overlap is not None else self.overlap
+
+            filters, multiplier = self.constructor.construct_from_psf(
+                psfs,
+                img_size=img_size,
+                patch_size=patch_size,
+                overlap=overlap,
+            )
+            return {
+                "filters": filters,
+                "multipliers": multiplier,
+                "method": self.method,
+                "img_size": img_size,
+                "patch_size": patch_size,
+                "overlap": overlap,
+            }
 
 
 class DiffractionBlurGenerator3D(PSFGenerator):
