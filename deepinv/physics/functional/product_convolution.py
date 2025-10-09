@@ -115,7 +115,7 @@ def product_convolution2d_patches(
     n_rows, n_cols = patches.size(2), patches.size(3)
     assert n_rows * n_cols == h.size(
         2
-    ), "The number of patches must be equal to the number of PSFs"
+    ), f"The number of patches must be equal to the number of PSFs, got {n_rows*n_cols} and {h.size(2)}"
 
     # Flatten K1 and K2 to: (B, C, K, P1, P2)
     patches = patches.flatten(2, 3)

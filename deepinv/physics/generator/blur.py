@@ -7,7 +7,7 @@ from math import ceil, floor
 from deepinv.physics.functional.product_convolution import (
     crop_unity_partition_2d,
     unity_partition_function_2d,
-    _as_pair
+    _as_pair,
 )
 from deepinv.physics.generator import PhysicsGenerator
 from deepinv.physics.functional import histogramdd, conv2d, bump_function
@@ -705,19 +705,18 @@ class TiledPSFConstructor(nn.Module):
 
         # Default parameters if img_size, psf_size and spacing are given
         # Otherwise, we expect these parameters to be given at each call of construct_from_psf
+        self.psf_size = _as_pair(psf_size)
         if (
             (img_size is not None)
-            and (psf_size is not None)
             and (patch_size is not None)
             and (overlap is not None)
         ):
             img_size = _as_pair(img_size)
-            psf_size = _as_pair(psf_size)
             patch_size = _as_pair(patch_size)
             overlap = _as_pair(overlap)
 
             self.img_size = img_size
-            self.psf_size = psf_size
+
             self.patch_size = patch_size
             self.overlap = overlap
 
@@ -742,6 +741,7 @@ class TiledPSFConstructor(nn.Module):
         multiplier = unity_partition_function_2d(
             img_size, patch_size, overlap, mode="bump"
         ).to(device=device, dtype=dtype)
+        print("multiplier shape before cropping:", multiplier.shape)
         multiplier, _ = crop_unity_partition_2d(
             multiplier, patch_size, overlap, psf_size
         )
@@ -812,8 +812,8 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
 
     def __init__(
         self,
-        psf_generator: PSFGenerator,
         img_size: tuple[int],
+        psf_generator: PSFGenerator = None,
         n_eigen_psf: int = 10,
         spacing: tuple[int] = None,
         method: str = "eigen_psf",
@@ -858,7 +858,6 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
 
             self.constructor = EigenPSFConstructor(
                 img_size=self.img_size,
-                psf_size=self.psf_generator.psf_size,
                 spacing=self.spacing,
                 n_eigen_psf=self.n_eigen_psf,
                 device=self.device,
@@ -870,7 +869,6 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
 
             self.constructor = TiledPSFConstructor(
                 img_size=self.img_size,
-                psf_size=self.psf_generator.psf_size,
                 patch_size=self.patch_size,
                 overlap=self.overlap,
                 device=self.device,
@@ -889,6 +887,7 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
             multipliers: a tensor of shape (B, C, n_eigen_psf, H, W).
         """
         self.rng_manual_seed(seed)
+        assert self.psf_generator is not None, "psf_generator must be defined."
         self.psf_generator.rng_manual_seed(seed)
 
         if self.method == "eigen_psf":
@@ -1001,38 +1000,42 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
                 "patch_size": patch_size,
                 "overlap": overlap,
             }
-            
+
     @staticmethod
-    def get_tile_centers(img_size: tuple[int, ...], 
-                        spacing: tuple[int, ...], 
-                        patch_size: tuple[int, ...] = None,
-                        overlap: tuple[int, ...] = None, 
-                        device: str = None, 
-                        dtype: torch.dtype = torch.float32) -> Tensor:
+    def get_tile_centers(
+        img_size: tuple[int, ...],
+        patch_size: tuple[int, ...] = None,
+        overlap: tuple[int, ...] = None,
+        device: str = None,
+        dtype: torch.dtype = torch.int32,
+    ) -> Tensor:
+        r"""
+        This function computes the centers of the patches in tiled mode.
+
+        """
+
         img_size = _as_pair(img_size)
-        spacing = _as_pair(spacing)
         overlap = None if overlap is None else _as_pair(overlap)
         patch_size = None if patch_size is None else _as_pair(patch_size)
 
         H, W = img_size
-        if patch_size is None or overlap is None:
-            # Eigen PSF mode: uniform grid based on spacing
-            nh, nw = H // spacing[0], W // spacing[1]
-            th = torch.linspace(0, 1, nh + 1, device=device, dtype=dtype)[:-1] + 0.5 / nh
-            tw = torch.linspace(0, 1, nw + 1, device=device, dtype=dtype)[:-1] + 0.5 / nw
-        else:
-            # Tiled mode: grid of patch centers based on stride
-            stride_h = patch_size[0] - overlap[0]
-            stride_w = patch_size[1] - overlap[1]
-            nh = (H - patch_size[0]) // stride_h + 1
-            nw = (W - patch_size[1]) // stride_w + 1
-            # centers in pixel indices, convert to [0,1] by dividing by H-1/W-1
-            ys = torch.arange(0, nh, device=device, dtype=dtype) * stride_h + (patch_size[0] - 1) / 2
-            xs = torch.arange(0, nw, device=device, dtype=dtype) * stride_w + (patch_size[1] - 1) / 2
-            th = ys / max(H - 1, 1)
-            tw = xs / max(W - 1, 1)
 
-        yy, xx = torch.meshgrid(th, tw, indexing="ij")
+        # Tiled mode: grid of patch centers based on stride
+        stride_h = patch_size[0] - overlap[0]
+        stride_w = patch_size[1] - overlap[1]
+        nh = H - patch_size[0] // 2
+        nw = W - patch_size[1] // 2
+        # centers in pixel indices, convert to [0,1] by dividing by H-1/W-1
+        ys = (
+            torch.arange(0, nh, step=stride_h, device=device, dtype=dtype)
+            + (patch_size[0] - 1) // 2
+        )
+        xs = (
+            torch.arange(0, nw, step=stride_w, device=device, dtype=dtype)
+            + (patch_size[1] - 1) // 2
+        )
+
+        yy, xx = torch.meshgrid(ys, xs, indexing="ij")
         centers = torch.stack((yy.flatten(), xx.flatten()), dim=1)
         return centers
 

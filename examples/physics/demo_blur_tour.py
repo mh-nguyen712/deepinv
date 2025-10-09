@@ -371,3 +371,46 @@ plot(
 )
 
 # %%
+img_size = 32
+patch_size = 16
+overlap = 8
+centers = ProductConvolutionBlurGenerator.get_tile_centers(
+    img_size=img_size, patch_size=patch_size, overlap=overlap
+)
+# %%
+# rotation_generator = RotationGenerator((1, 1), device=device, dtype=dtype)
+# psf_list = rotation_generator.step(batch_size=centers.size(0))["filter"].transpose(0, 1)[None]
+
+psf_list = torch.zeros(1, 1, 9, 5, 5, device=device)
+psf_list[0, 0, :, 2, 2] = 1
+
+generator = ProductConvolutionBlurGenerator(
+    img_size=img_size,
+    patch_size=patch_size,
+    overlap=overlap,
+    method="tiled_psf",
+    device=device,
+)
+params = generator.step_from_psfs(psfs=psf_list)
+
+physics = SpaceVaryingBlur(**params, device=device)
+import torch.nn.functional as F
+
+for i in range(16):
+    dirac_comb = torch.zeros((1, 1, img_size, img_size), device=device)
+    dirac_comb[0, 0, i::8, ::8] = 1
+    psf_grid_eigen = physics(dirac_comb)
+    psf_grid_eigen = F.pad(psf_grid_eigen, (2, 2, 2, 2))
+
+    plot(
+        [dirac_comb, psf_grid_eigen.abs() ** 0.5],
+        titles=["Dirac comb", "Impulse responses"],
+        suptitle="Space varying impulse responses -- Tile",
+        rescale_mode="min_max",
+        cbar=True,
+        figsize=(5, 5),
+    )
+# %%
+print(psf_grid_eigen.shape)
+print(dirac_comb.shape)
+# %%
