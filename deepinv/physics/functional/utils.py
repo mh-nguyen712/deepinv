@@ -1,5 +1,6 @@
-import torch 
+import torch
 import numpy as np
+
 
 def bump_function(x, a=1.0, b=1.0):
     r"""

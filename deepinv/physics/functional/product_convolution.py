@@ -26,9 +26,9 @@ def product_convolution2d(
 
     where :math:`\star` is a convolution, :math:`\odot` is a Hadamard product, :math:`w_k` are multipliers :math:`h_k` are filters.
 
-    :param torch.Tensor x: Tensor of size (B, C, H, W)
-    :param torch.Tensor w: Tensor of size (b, c, K, H, W). :math:`b \in \{1, B\}` and :math:`c \in \{1, C\}`
-    :param torch.Tensor h: Tensor of size (b, c, K, h, w). :math:`b \in \{1, B\}` and :math:`c \in \{1, C\}`, :math:`h\leq H` and :math:`w\leq W`.
+    :param torch.Tensor x: Tensor of size `(B, C, H, W)`
+    :param torch.Tensor w: Tensor of size `(b, c, K, H, W)`. :math:`b \in \{1, B\}` and :math:`c \in \{1, C\}`
+    :param torch.Tensor h: Tensor of size `(b, c, K, h, w)`. :math:`b \in \{1, B\}` and :math:`c \in \{1, C\}`, :math:`h\leq H` and :math:`w\leq W`.
     :param padding: ( options = `valid`, `circular`, `replicate`, `reflect`. If `padding = 'valid'` the blurred output is smaller than the image (no padding), otherwise the blurred output has the same size as the image.
 
     :return: torch.Tensor y
@@ -143,7 +143,7 @@ def product_convolution2d_patches(
     B, C, K, H, W = result.size()
     result = patches_to_image(
         result.view(B, C, n_rows, n_cols, H, W),
-        add_tuple(overlap, add_tuple(psf_size, (-1,) * len(psf_size))),
+        _add_tuple(overlap, _add_tuple(psf_size, (-1,) * len(psf_size))),
     )[..., margin[0] : -margin[0], margin[1] : -margin[1]]
     return result
 
@@ -190,8 +190,8 @@ def product_convolution2d_adjoint_patches(
 
     patches = image_to_patches(
         y,
-        patch_size=add_tuple(patch_size, add_tuple(psf_size, (-1,) * len(psf_size))),
-        overlap=add_tuple(overlap, add_tuple(psf_size, (-1,) * len(psf_size))),
+        patch_size=_add_tuple(patch_size, _add_tuple(psf_size, (-1,) * len(psf_size))),
+        overlap=_add_tuple(overlap, _add_tuple(psf_size, (-1,) * len(psf_size))),
     )
     # (B, C, K1, K2, P1, P2)
 
@@ -348,7 +348,7 @@ def get_index_and_position(
     """
     overlap = _as_pair(overlap)
     patch_size = _as_pair(patch_size)
-    stride = add_tuple(patch_size, overlap, -1)
+    stride = _add_tuple(patch_size, overlap, -1)
 
     if isinstance(position, torch.Tensor):
         position = position.tolist()
@@ -590,7 +590,7 @@ def patches_to_image(patches: Tuple[int], overlap: Tuple[int]):
     return output.contiguous()
 
 
-def add_tuple(a: tuple, b: tuple, constant: float = 1) -> tuple:
+def _add_tuple(a: tuple, b: tuple, constant: float = 1) -> tuple:
     r"""
     Add 2 tuples element-wise, where the second tuple is multiplied by constant:
 
@@ -668,7 +668,7 @@ def compute_patch_info(
     patch_size = _as_pair(patch_size)
     overlap = _as_pair(overlap)
 
-    stride = add_tuple(patch_size, overlap, -1)
+    stride = _add_tuple(patch_size, overlap, -1)
     num_patches = (
         (image_size[0] - patch_size[0]) // stride[0] + 1,
         (image_size[1] - patch_size[1]) // stride[1] + 1,
@@ -684,3 +684,133 @@ def compute_patch_info(
         "max_size": max_size,
     }
     return patch_info
+
+
+class PatchHandler:
+    r"""
+    Class to handle patch information.
+
+    :param Tuple[int] image_size: image size in (height, width)
+    :param Tuple[int] patch_size: patch size in (height, width)
+    :param Tuple[int] overlap: overlap size in (height, width)
+    """
+
+    @staticmethod
+    def compute_patch_info(
+        image_size: Tuple[int], patch_size: Tuple[int], overlap: Tuple[int]
+    ):
+        r"""
+        Compute all information about the patches generated from the given image of image_size.
+
+        :param Tuple[int] image_size: image size in (height, width)
+        :param Tuple[int] patch_size: patch size in (height, width)
+        :param Tuple[int] overlap: overlap size in (height, width)
+
+        :returns: (Dictionary) a dictionary containing all information about the patches, containing:
+            - stride
+            - num_patches (height, width)
+            - max_size (height, width): the size of image which can be split into patches.
+                Pixels from max_size to image_size will be cropped.
+        """
+
+        image_size = _as_pair(image_size)
+        patch_size = _as_pair(patch_size)
+        overlap = _as_pair(overlap)
+
+        stride = _add_tuple(patch_size, overlap, -1)
+        num_patches = (
+            (image_size[0] - patch_size[0]) // stride[0] + 1,
+            (image_size[1] - patch_size[1]) // stride[1] + 1,
+        )
+
+        max_size = (
+            patch_size[0] + (num_patches[0] - 1) * stride[0],
+            patch_size[1] + (num_patches[1] - 1) * stride[1],
+        )
+
+        return stride, num_patches, max_size
+
+    @staticmethod
+    def patches_to_image(patches: Tuple[int], overlap: Tuple[int]):
+        """
+        Reconstruct a batch of images from patches.
+        This function is the reverse of  `patches_to_image`
+
+        Parameters:
+            patches (torch.Tensor): Input image tensor of shape (B, C, n_rows, n_cols, patch_size, patch_size).
+            patch_size (int): Size of each patch (patch_size x patch_size).
+            overlap (int): Overlapping size between patches.
+
+        Returns:
+            torch.Tensor: Batch of image of shape (B, C, H, W).
+        """
+
+        if isinstance(overlap, int):
+            overlap = (overlap, overlap)
+        B, C, num_patches_h, num_patches_w, h, w = patches.size()
+
+        output_size = (
+            h + (num_patches_h - 1) * (h - overlap[0]),
+            w + (num_patches_w - 1) * (w - overlap[1]),
+        )
+        if not isinstance(patches, torch.Tensor):
+            raise TypeError("Patches should be a torch.Tensor")
+
+        # Rearrange the patches to have the desired shape (B, num_patches_h * num_patches_w, C, h, w)
+        patches = (
+            patches.permute(0, 2, 3, 1, 4, 5)
+            .contiguous()
+            .view(B, num_patches_h * num_patches_w, C, h, w)
+        )
+
+        # Now reverse the process using torch.fold
+        # Calculate the number of patches
+        num_patches = num_patches_h * num_patches_w
+
+        # Reshape the patches to (B, C*h*w, num_patches)
+        patches = patches.view(B, num_patches, C * h * w).permute(0, 2, 1)
+        stride = (h - overlap[0], w - overlap[1])
+        # Fold the patches back into the image
+        output = F.fold(
+            patches,
+            output_size=output_size,
+            kernel_size=(h, w),
+            stride=stride,
+        )
+
+        return output.contiguous()
+
+    @staticmethod
+    def image_to_patches(
+        image: Tuple[int], patch_size: Tuple[int], overlap: Tuple[int]
+    ):
+        """
+        Splits an image into patches with specified patch size and overlap.
+        The image will be cropped to the appropriate size so that all patches have the same size.
+
+        Parameters:
+            image (torch.Tensor): Input image tensor of shape (B, C, H, W).
+            patch_size (int): Size of each patch (patch_size x patch_size).
+            overlap (int): Overlapping size between patches.
+
+        Returns:
+            torch.Tensor: Batch of patches of shape (B, C, n_rows, n_cols, patch_size, patch_size).
+
+        """
+        patch_size = _as_pair(patch_size)
+        overlap = _as_pair(overlap)
+
+        # Ensure image is a tensor
+        if not isinstance(image, torch.Tensor):
+            raise TypeError("Image should be a torch.Tensor")
+
+        stride = (patch_size[0] - overlap[0], patch_size[1] - overlap[1])
+        # Ensure the patch size and overlap are valid
+        assert (stride[0] > 0) * (
+            stride[1] > 0
+        ), "Patch size must be greater than overlap"
+
+        patches = image.unfold(2, patch_size[0], stride[0]).unfold(
+            3, patch_size[1], stride[1]
+        )
+        return patches.contiguous()

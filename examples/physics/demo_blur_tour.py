@@ -6,6 +6,7 @@ This example provides a tour of 2D blur operators in DeepInverse.
 In particular, we show how to use DiffractionBlurs (Fresnel diffraction), motion blurs and space varying blurs.
 
 """
+
 # %%
 import torch
 
@@ -283,16 +284,20 @@ batch_size = 1
 
 # Creating a Dirac comb to visualize the impulse responses
 delta = 32
-dirac_comb = torch.zeros((1,1, *img_size), device=device)
+dirac_comb = torch.zeros((1, 1, *img_size), device=device)
 dirac_comb[0, 0, ::delta, ::delta] = 1
 
 # Now, scattered random psfs are synthesized and interpolated spatially
 diffraction_generator = DiffractionBlurGenerator(
-    (psf_size, psf_size), fc=0.15, list_param=["Z4","Z5", "Z6", "Z7", "Z8"], 
+    (psf_size, psf_size),
+    fc=0.15,
+    list_param=["Z4", "Z5", "Z6", "Z7", "Z8"],
     max_zernike_amplitude=0.2,
-    device=device, dtype=dtype
+    device=device,
+    dtype=dtype,
 )
 import numpy as np
+
 
 class RotationGenerator(dinv.physics.generator.PSFGenerator):
     def __init__(self, psf_size, device="cpu", dtype=torch.float32):
@@ -300,8 +305,7 @@ class RotationGenerator(dinv.physics.generator.PSFGenerator):
         self.psf_size = psf_size
         self.dtype = dtype
         self.device = device
-        
-        
+
     def step(self, batch_size=1, seed=None, **kwargs):
         angle = np.linspace(0, 360, batch_size)
         psf = []
@@ -310,6 +314,7 @@ class RotationGenerator(dinv.physics.generator.PSFGenerator):
             psf.append(f)
         psf = torch.cat(psf, dim=0)
         return {"filter": psf}
+
 
 rotation_generator = RotationGenerator((psf_size, psf_size), device=device, dtype=dtype)
 # First method: eigen-psfs
@@ -329,9 +334,15 @@ physics = SpaceVaryingBlur(**params_pc, device=device)
 
 psf_grid_eigen = physics(dirac_comb)
 
-plot(psf_grid_eigen.abs() ** 0.5, titles="Space varying impulse responses -- Eigen", rescale_mode="min_max", cbar=True, figsize=(5, 5))
+plot(
+    psf_grid_eigen.abs() ** 0.5,
+    titles="Space varying impulse responses -- Eigen",
+    rescale_mode="min_max",
+    cbar=True,
+    figsize=(5, 5),
+)
 
-# grid_psf = rotation_generator.step(batch_size=16, seed=0)["filter"] 
+# grid_psf = rotation_generator.step(batch_size=16, seed=0)["filter"]
 # plot([_ for _ in grid_psf[5:8] ** 0.5])
 # plot([_ for _ in grid_psf[9:12] ** 0.5])
 # plot([_ for _ in grid_psf[13:16] ** 0.5])
@@ -351,6 +362,12 @@ params_pc = pc_generator.step(batch_size, seed=0)
 physics = SpaceVaryingBlur(**params_pc, device=device)
 
 psf_grid_tiled = physics(dirac_comb)
-plot(psf_grid_tiled.abs() ** 0.5, titles="Space varying impulse responses -- Tiled", rescale_mode="min_max", cbar=True, figsize=(5, 5))
+plot(
+    psf_grid_tiled.abs() ** 0.5,
+    titles="Space varying impulse responses -- Tiled",
+    rescale_mode="min_max",
+    cbar=True,
+    figsize=(5, 5),
+)
 
 # %%

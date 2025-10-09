@@ -24,6 +24,7 @@ from deepinv.physics.functional.product_convolution import compute_patch_info
 
 import warnings
 
+
 class Downsampling(LinearPhysics):
     r"""
     Downsampling operator for super-resolution problems.
@@ -590,19 +591,20 @@ class SpaceVaryingBlur(LinearPhysics):
             self.spacing = spacing
         self.method = method
         self.img_size = img_size
-        
+
         self.update_parameters(filters, multipliers, padding, **kwargs)
         self.to(device)
 
     def A(
-        self, x: Tensor, 
-        filters=None, 
-        multipliers=None, 
-        padding=None, 
+        self,
+        x: Tensor,
+        filters=None,
+        multipliers=None,
+        padding=None,
         img_size: tuple[int] = None,
         patch_size: tuple[int] = None,
         overlap: tuple[int] = None,
-        **kwargs
+        **kwargs,
     ) -> torch.Tensor:
         r"""
         Applies the space varying blur operator to the input image.
@@ -619,7 +621,9 @@ class SpaceVaryingBlur(LinearPhysics):
         """
         self.update_parameters(filters, multipliers, padding, **kwargs)
         if self.method == "eigen_psf":
-            return product_convolution2d(x, self.multipliers, self.filters, self.padding)
+            return product_convolution2d(
+                x, self.multipliers, self.filters, self.padding
+            )
         elif self.method == "tiled_psf":
             if patch_size is not None:
                 self.patch_size = patch_size
@@ -640,16 +644,16 @@ class SpaceVaryingBlur(LinearPhysics):
                 overlap=self.overlap,
             )
 
-
     def A_adjoint(
-        self, y: Tensor, 
+        self,
+        y: Tensor,
         filters=None,
-        multipliers=None, 
+        multipliers=None,
         padding=None,
         img_size: tuple[int] = None,
         patch_size: tuple[int] = None,
         overlap: tuple[int] = None,
-        **kwargs
+        **kwargs,
     ) -> torch.Tensor:
         r"""
         Applies the adjoint operator.
@@ -716,8 +720,7 @@ class SpaceVaryingBlur(LinearPhysics):
         if img_size is not None:
             self.img_size = img_size
         super().update_parameters(**kwargs)
-        
-        
+
     def get_psf(
         self,
         centers: Tensor = None,
@@ -758,7 +761,7 @@ class SpaceVaryingBlur(LinearPhysics):
         elif self.method == "eigen_psf":
             psf = get_psf_pconv2d_eigen(h, w, centers)
         return psf
-    
+
     def update_patch_info(self, image_size, patch_size, overlap):
         if isinstance(image_size, int):
             image_size = (image_size, image_size)
@@ -772,7 +775,10 @@ class SpaceVaryingBlur(LinearPhysics):
         self.overlap = overlap
         info = compute_patch_info(self.image_size, self.patch_size, self.overlap)
         self.num_patches = info["num_patches"]
-        if info["max_size"][0] < self.image_size[0] or info["max_size"][1] < self.image_size[1]:
+        if (
+            info["max_size"][0] < self.image_size[0]
+            or info["max_size"][1] < self.image_size[1]
+        ):
             better_overlap = (
                 int(
                     (self.num_patches[0] * self.patch_size[0] - self.image_size[0])
