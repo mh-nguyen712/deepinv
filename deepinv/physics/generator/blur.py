@@ -1,9 +1,13 @@
 import torch
+import warnings
+import torch.nn as nn
+from torch import Tensor
 import numpy as np
 from math import ceil, floor
 from deepinv.physics.functional.product_convolution import (
     crop_unity_partition_2d,
     unity_partition_function_2d,
+    _as_pair
 )
 from deepinv.physics.generator import PhysicsGenerator
 from deepinv.physics.functional import histogramdd, conv2d, bump_function
@@ -27,8 +31,8 @@ class PSFGenerator(PhysicsGenerator):
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
-        if isinstance(psf_size, int):
-            psf_size = (psf_size, psf_size)
+        # Normalize to 2D pair
+        psf_size = _as_pair(psf_size)
 
         self.shape = (num_channels,) + psf_size
         self.psf_size = psf_size
@@ -83,10 +87,7 @@ class MotionBlurGenerator(PSFGenerator):
         n_steps: int = 1000,
     ) -> None:
         kwargs = {"l": l, "sigma": sigma, "n_steps": n_steps}
-        if len(psf_size) != 2:
-            raise ValueError(
-                "psf_size must 2D. Add channels via num_channels parameter"
-            )
+        psf_size = _as_pair(psf_size)
         super().__init__(
             psf_size=psf_size,
             num_channels=num_channels,
@@ -255,11 +256,13 @@ class DiffractionBlurGenerator(PSFGenerator):
 
         self.list_param = list_param  # list of parameters to provide
 
-        pupil_size = (
+        # Ensure pupil_size is a pair and at least as large as psf_size in each dim
+        self.pupil_size = _as_pair(self.pupil_size)
+        self.psf_size = _as_pair(self.psf_size)
+        self.pupil_size = (
             max(self.pupil_size[0], self.psf_size[0]),
             max(self.pupil_size[1], self.psf_size[1]),
         )
-        self.pupil_size = pupil_size
 
         lin_x = torch.linspace(-0.5, 0.5, self.pupil_size[0], **self.factory_kwargs)
         lin_y = torch.linspace(-0.5, 0.5, self.pupil_size[1], **self.factory_kwargs)
@@ -541,11 +544,6 @@ def cart2pol(x, y):
     return rho
 
 
-import warnings
-import torch.nn as nn
-from torch import Tensor
-
-
 class EigenPSFConstructor(nn.Module):
     r"""
     Helper class to construct the eigen PSF interpolation.
@@ -566,14 +564,11 @@ class EigenPSFConstructor(nn.Module):
         self.dtype = dtype
 
         # Default parameters if img_size, psf_size and spacing are given
-        # Otherwise, we expect these parameters to be given at each call of construct_operator_metadata
+        # Otherwise, we expect these parameters to be given at each call of construct_from_psf
         if (img_size is not None) and (psf_size is not None) and (spacing is not None):
-            if isinstance(img_size, int):
-                img_size = (img_size, img_size)
-            if isinstance(psf_size, int):
-                psf_size = (psf_size, psf_size)
-            if isinstance(spacing, int):
-                spacing = (spacing, spacing)
+            img_size = _as_pair(img_size)
+            psf_size = _as_pair(psf_size)
+            spacing = _as_pair(spacing)
 
             self.img_size = img_size
             self.psf_size = psf_size
@@ -597,10 +592,8 @@ class EigenPSFConstructor(nn.Module):
         device: str = None,
         dtype: torch.dtype = torch.float32,
     ):
-        if isinstance(img_size, int):
-            img_size = (img_size, img_size)
-        if isinstance(spacing, int):
-            spacing = (spacing, spacing)
+        img_size = _as_pair(img_size)
+        spacing = _as_pair(spacing)
 
         # Interpolating the psf_grid coefficients with thin plate splines
         # NOTE: ideally, the points should be spanning [0,1], but we shift to match the tiled_psf version. We expect issues on the boundaries since Thin Plate Spline is quite bad at extrapolating.
@@ -618,30 +611,6 @@ class EigenPSFConstructor(nn.Module):
         psf_grid_points = torch.stack((yy.flatten(), xx.flatten()), dim=1)
 
         return psf_centers, psf_grid_points
-
-    def construct_operator_metadata(
-        self,
-        psfs: Tensor,
-        psf_centers: Tensor = None,
-        pixel_centers: Tensor = None,
-        img_size: tuple[int, ...] = None,
-        n_eigen_psf: int = None,
-    ) -> tuple[Tensor, Tensor]:
-        r"""
-        Deprecated: use construct_from_psf(psfs, centers, img_size, n_eigen_psf) instead.
-        """
-        warnings.warn(
-            "EigenPSFConstructor.construct_operator_metadata is deprecated; use construct_from_psf instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        # If pixel_centers is given, still honor img_size; otherwise, build grid internally
-        return self.construct_from_psf(
-            psfs=psfs,
-            centers=psf_centers,
-            img_size=img_size,
-            n_eigen_psf=n_eigen_psf,
-        )
 
     def construct_from_psf(
         self,
@@ -735,21 +704,17 @@ class TiledPSFConstructor(nn.Module):
         self.dtype = dtype
 
         # Default parameters if img_size, psf_size and spacing are given
-        # Otherwise, we expect these parameters to be given at each call of construct_operator_metadata
+        # Otherwise, we expect these parameters to be given at each call of construct_from_psf
         if (
             (img_size is not None)
             and (psf_size is not None)
             and (patch_size is not None)
             and (overlap is not None)
         ):
-            if isinstance(img_size, int):
-                img_size = (img_size, img_size)
-            if isinstance(psf_size, int):
-                psf_size = (psf_size, psf_size)
-            if isinstance(patch_size, int):
-                patch_size = (patch_size, patch_size)
-            if isinstance(overlap, int):
-                overlap = (overlap, overlap)
+            img_size = _as_pair(img_size)
+            psf_size = _as_pair(psf_size)
+            patch_size = _as_pair(patch_size)
+            overlap = _as_pair(overlap)
 
             self.img_size = img_size
             self.psf_size = psf_size
@@ -782,21 +747,6 @@ class TiledPSFConstructor(nn.Module):
         )
         multiplier = multiplier.flatten(0, 1).unsqueeze(0).unsqueeze(0)
         return multiplier
-
-    def construct_operator_metadata(
-        self,
-        psfs: Tensor,
-        img_size: tuple[int, ...] = None,
-        patch_size: tuple[int, ...] = None,
-        overlap: tuple[int, ...] = None,
-    ) -> tuple[Tensor, Tensor, tuple[int, int]]:
-        warnings.warn(
-            "TiledPSFConstructor.construct_operator_metadata is deprecated; use construct_from_psf instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        filters, mult = self.construct_from_psf(psfs, img_size, patch_size, overlap)
-        return filters, mult
 
     def construct_from_psf(
         self,
@@ -874,14 +824,10 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
         **kwargs,
     ) -> None:
         super().__init__(device=device, **kwargs)
-        if isinstance(img_size, int):
-            img_size = (img_size, img_size)
-        if isinstance(spacing, int):
-            spacing = (spacing, spacing)
-        if isinstance(overlap, int):
-            overlap = (overlap, overlap)
-        if isinstance(patch_size, int):
-            patch_size = (patch_size, patch_size)
+        img_size = _as_pair(img_size)
+        spacing = None if spacing is None else _as_pair(spacing)
+        overlap = None if overlap is None else _as_pair(overlap)
+        patch_size = None if patch_size is None else _as_pair(patch_size)
 
         self.psf_generator = psf_generator
         self.img_size = img_size
@@ -1055,6 +1001,40 @@ class ProductConvolutionBlurGenerator(PhysicsGenerator):
                 "patch_size": patch_size,
                 "overlap": overlap,
             }
+            
+    @staticmethod
+    def get_tile_centers(img_size: tuple[int, ...], 
+                        spacing: tuple[int, ...], 
+                        patch_size: tuple[int, ...] = None,
+                        overlap: tuple[int, ...] = None, 
+                        device: str = None, 
+                        dtype: torch.dtype = torch.float32) -> Tensor:
+        img_size = _as_pair(img_size)
+        spacing = _as_pair(spacing)
+        overlap = None if overlap is None else _as_pair(overlap)
+        patch_size = None if patch_size is None else _as_pair(patch_size)
+
+        H, W = img_size
+        if patch_size is None or overlap is None:
+            # Eigen PSF mode: uniform grid based on spacing
+            nh, nw = H // spacing[0], W // spacing[1]
+            th = torch.linspace(0, 1, nh + 1, device=device, dtype=dtype)[:-1] + 0.5 / nh
+            tw = torch.linspace(0, 1, nw + 1, device=device, dtype=dtype)[:-1] + 0.5 / nw
+        else:
+            # Tiled mode: grid of patch centers based on stride
+            stride_h = patch_size[0] - overlap[0]
+            stride_w = patch_size[1] - overlap[1]
+            nh = (H - patch_size[0]) // stride_h + 1
+            nw = (W - patch_size[1]) // stride_w + 1
+            # centers in pixel indices, convert to [0,1] by dividing by H-1/W-1
+            ys = torch.arange(0, nh, device=device, dtype=dtype) * stride_h + (patch_size[0] - 1) / 2
+            xs = torch.arange(0, nw, device=device, dtype=dtype) * stride_w + (patch_size[1] - 1) / 2
+            th = ys / max(H - 1, 1)
+            tw = xs / max(W - 1, 1)
+
+        yy, xx = torch.meshgrid(th, tw, indexing="ij")
+        centers = torch.stack((yy.flatten(), xx.flatten()), dim=1)
+        return centers
 
 
 class DiffractionBlurGenerator3D(PSFGenerator):
