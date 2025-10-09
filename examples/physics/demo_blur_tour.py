@@ -7,7 +7,7 @@ In particular, we show how to use DiffractionBlurs (Fresnel diffraction), motion
 
 """
 
-# %%
+
 # %%
 import torch
 

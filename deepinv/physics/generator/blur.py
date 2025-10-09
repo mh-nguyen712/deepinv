@@ -302,7 +302,7 @@ class DiffractionBlurGenerator(PSFGenerator):
             self.apodize_mask = None
 
         # Ensure pupil_size is a pair and at least as large as psf_size in each dim
-        self.pupil_size = _as_pair(self.pupil_size)
+        self.pupil_size = _as_pair(pupil_size)
         self.psf_size = _as_pair(self.psf_size)
         self.pupil_size = (
             max(self.pupil_size[0], self.psf_size[0]),
