@@ -5,6 +5,15 @@ on:
     branches: [ main ]
     paths:
       - 'examples/**/*.py'
+      - '.github/workflows/generate_notebook.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'examples/**/*.py'
+      - '.github/workflows/generate_notebook.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 0'  # Weekly Sunday 03:00 UTC refresh
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -47,20 +56,14 @@ jobs:
             out_path="$out_dir/$base.ipynb"
             # Convert using jupytext
             jupytext --to ipynb "$f" --output "$out_path"
-          on:
-            push:
-              branches: [ main ]
-              paths:
-                - 'examples/**/*.py'
-                - '.github/workflows/generate_notebook.yml'
-            pull_request:
-              branches: [ main ]
-              paths:
-                - 'examples/**/*.py'
-                - '.github/workflows/generate_notebook.yml'
-            workflow_dispatch:
-            schedule:
-              - cron: '0 3 * * 0'  # Weekly Sunday 03:00 UTC refresh
+          done
+          echo "Notebook conversion done."
+
+      - name: Stage generated notebooks
+        run: |
+          set -euo pipefail
+          # Stage only .ipynb files under examples/_notebooks
+          mapfile -t files < <(find examples/_notebooks -type f -name '*.ipynb')
           if [ ${#files[@]} -gt 0 ]; then
             git add "${files[@]}"
           fi
@@ -77,10 +80,10 @@ jobs:
             echo "Skipping commit; nothing to update."
             exit 0
           fi
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git commit -m "Auto-convert examples to notebooks [skip ci]"
-            git push origin HEAD:main
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "Auto-convert examples to notebooks [skip ci]"
+          git push origin HEAD:main
 
       - name: Summary
         run: |
@@ -88,3 +91,4 @@ jobs:
             echo "Notebooks updated and pushed."
           else
             echo "No updates were necessary."
+          fi
