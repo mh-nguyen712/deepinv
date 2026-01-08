@@ -1154,3 +1154,105 @@ class SwinIR(Denoiser):
         flops += H * W * 3 * self.embed_dim * self.embed_dim
         flops += self.upsample.flops()
         return flops
+
+class SwinIRParam:
+    def __init__(self, task, scale=None, noise=None, jpeg=None, large_model=False, training_patch_size=128):
+        self.task = task
+        self.scale = scale
+        self.noise = noise
+        self.jpeg = jpeg
+        self.large_model = large_model
+        
+        self.default_params = dict(
+            depths=[6, 6, 6, 6, 6, 6],
+            num_heads=[6, 6, 6, 6, 6, 6],
+            window_size=8,
+            mlp_ratio=2,
+            resi_connection='1conv',
+            img_size=training_patch_size,
+            embed_dim=180,
+        )
+
+    def get_swinir_args(self):
+        if self.task == 'classical_sr':
+            model_args = self.default_params.copy()
+            model_args.update(dict(upscale=self.scale, in_chans=3, img_range=1., upsampler='pixelshuffle'))
+            url_key = self.scale
+
+        elif self.task == 'lightweight_sr':
+            model_args = dict(upscale=self.scale, in_chans=3, img_size=64, window_size=8,
+                              img_range=1., depths=[6, 6, 6, 6], embed_dim=60, num_heads=[6, 6, 6, 6],
+                              mlp_ratio=2, upsampler='pixelshuffledirect', resi_connection='1conv')
+            url_key = self.scale
+
+        elif self.task == 'real_sr':
+            model_args = self.default_params.copy()
+            model_args.update(dict(upscale=self.scale, in_chans=3, img_size=64, img_range=1., upsampler='nearest+conv'))
+            if not self.large_model:
+                url_key = 'small'
+            else:
+                model_args.update(dict(depths=[6, 6, 6, 6, 6, 6, 6, 6, 6], embed_dim=240,
+                                       num_heads=[8, 8, 8, 8, 8, 8, 8, 8, 8], resi_connection='3conv'))
+                url_key = 'large'
+
+        elif self.task == 'gray_dn':
+            model_args = self.default_params.copy()
+            model_args.update(dict(upscale=1, in_chans=1, img_size=128, img_range=1., upsampler=''))
+            url_key = self.noise
+
+        elif self.task == 'color_dn':
+            model_args = self.default_params.copy()
+            model_args.update(dict(upscale=1, in_chans=3, img_size=128, img_range=1., upsampler=''))
+            url_key = self.noise
+
+        elif self.task == 'jpeg_car':
+            model_args = self.default_params.copy()
+            model_args.update(dict(upscale=1, in_chans=1, img_size=126, window_size=7, img_range=255., upsampler=''))
+            url_key = self.jpeg
+
+        elif self.task == 'color_jpeg_car':
+            model_args = self.default_params.copy()
+            model_args.update(dict(upscale=1, in_chans=3, img_size=126, window_size=7, img_range=255., upsampler=''))
+            url_key = self.jpeg
+
+        else:
+            raise ValueError(f"Task {self.task} not recognized.")
+
+        return model_args, url_key
+
+    def get_url(self):
+        _, url_key = self.get_swinir_args()
+        
+        base_url = 'https://github.com/JingyunLiang/SwinIR/releases/download/v0.0'
+        
+        if self.task == 'classical_sr':
+            return f'{base_url}/001_classicalSR_DIV2K_s48w8_SwinIR-M_x{url_key}.pth'
+        elif self.task == 'lightweight_sr':
+            return f'{base_url}/002_lightweightSR_DIV2K_s64w8_SwinIR-S_x{url_key}.pth'
+        elif self.task == 'real_sr':
+            if url_key == 'small':
+                return f'{base_url}/003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x4_GAN.pth'
+            else:
+                 return f'{base_url}/003_realSR_BSRGAN_DFOWMFC_s64w8_SwinIR-L_x4_GAN.pth'
+        elif self.task == 'gray_dn':
+            return f'{base_url}/004_grayDN_DFWB_s128w8_SwinIR-M_noise{url_key}.pth'
+        elif self.task == 'color_dn':
+            return f'{base_url}/005_colorDN_DFWB_s128w8_SwinIR-M_noise{url_key}.pth'
+        elif self.task == 'jpeg_car':
+            return f'{base_url}/006_CAR_DFWB_s126w7_SwinIR-M_jpeg{url_key}.pth'
+        elif self.task == 'color_jpeg_car':
+            return f'{base_url}/006_colorCAR_DFWB_s126w7_SwinIR-M_jpeg{url_key}.pth'
+        return None
+
+def define_model(args):
+    swinir_param = SwinIRParam(
+        task=args.task,
+        scale=getattr(args, 'scale', None),
+        noise=getattr(args, 'noise', None),
+        jpeg=getattr(args, 'jpeg', None),
+        large_model=getattr(args, 'large_model', False),
+        training_patch_size=getattr(args, 'training_patch_size', 128)
+    )
+    model_args, url_key = swinir_param.get_swinir_args()
+    model = SwinIR(**model_args)
+    return model
