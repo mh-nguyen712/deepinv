@@ -8,9 +8,11 @@ Current
 
 New Features
 ^^^^^^^^^^^^
+- Add :class:`deepinv.sampling.DDRMDataFidelity`, the closed-form noisy data-fidelity term of DDRM for :class:`deepinv.physics.DecomposablePhysics` (:gh:`1350`)
 
 Changed
 ^^^^^^^
+- Refactor :class:`deepinv.sampling.DDRM` to iterate on the closed-form fusion provided by :class:`deepinv.sampling.DDRMDataFidelity` (:gh:`1350`)
 
 Fixed
 ^^^^^

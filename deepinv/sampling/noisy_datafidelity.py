@@ -226,23 +226,57 @@ class DDRMDataFidelity(NoisyDataFidelity):
     r"""
     Denoising Diffusion Restoration Model (DDRM) data-fidelity term.
 
-    This corresponds to the closed-form approximation of the measurement term for a decomposable linear operator :math: `A=U\Sigma V^\top`
-    see `Denoising Diffusion Restoration Models <https://arxiv.org/abs/2201.11793>` and also `<https://arxiv.org/pdf/2410.00083>`.
+    This is the closed-form approximation of the measurement term for a decomposable linear
+    operator :math:`A = U\Sigma V^{\top}`, see :footcite:t:`kawar2022denoising` and the survey
+    :footcite:t:`daras2024survey`.
 
-    .. math ::
-        V\Sigma^\top 
-        \left|\sigma_y^2 I-\sigma_t^2\Sigma\Sigma^\top \right|^\dagger
-        \left(
-            \Sigma V^\top \denoiser{x_t}{\sigma_t} - U^\top y
-        \right),
+    Plugging the Gaussian approximation
+    :math:`p(x_0 \vert x_t) \approx \mathcal{N}\left(\denoiser{x_t}{\sigma_t}, \sigma_t^2 \mathrm{Id}\right)`
+    into :math:`p_t(y \vert x_t) = \int p(y \vert x_0) p(x_0 \vert x_t) \mathrm{d}x_0` gives
 
-    where :math:`\sigma_t = \sigma(t)` is the diffusion model noise level, and :math:`\sigma_y` is the noise level for the measurement (std).
+    .. math::
+        p_t(y \vert x_t) \approx \mathcal{N}\left(y; A\denoiser{x_t}{\sigma_t},
+        \sigma_y^2 \mathrm{Id} + \sigma_t^2 A A^{\top}\right),
 
-    :param deepinv.models.Denoiser denoiser: Denoiser network
-    :param float weight: Weighting factor for the data fidelity term. Default to 1.0 .
-    :param float eps: Numerical threshold used when computing the pseudoinverse of the spectral weighting term. 
-        Values with absolute magnitude below `eps` are treated as zero. Default to 1e-8.
+    whose negative log-likelihood has the gradient
+
+    .. math::
+        -\nabla_{x_t} \log p_t(y \vert x_t) \approx
+        V \Sigma^{\top}
+        \left(\sigma_y^2 \mathrm{Id} + \sigma_t^2 \Sigma \Sigma^{\top}\right)^{-1}
+        \left(\Sigma V^{\top} \denoiser{x_t}{\sigma_t} - U^{\top} y\right),
+
+    where :math:`\sigma_t = \sigma(t)` is the diffusion model noise level and :math:`\sigma_y` is
+    the standard deviation of the measurement noise.
+
+    .. note::
+
+        Because the covariance :math:`\sigma_y^2 \mathrm{Id} + \sigma_t^2 \Sigma \Sigma^{\top}` is
+        positive definite, the spectral weights are bounded by
+        :math:`\min(\sigma_y^{-2}, (\sigma_t s)^{-2})` and no pseudo-inverse is needed.
+
+    .. note::
+
+        Equation (3.33) of :footcite:t:`daras2024survey` writes this term with
+        :math:`\left| \sigma_y^2 \mathrm{Id} - \sigma_t^2 \Sigma \Sigma^{\top} \right|^{\dagger}`,
+        i.e. a *difference* and a pseudo-inverse. That form belongs to the DDRM sampler itself,
+        where :math:`\bar{x}_t` is constructed from :math:`\bar{y}` and the two therefore share the
+        measurement noise. Here :math:`x_t` comes from the reverse SDE, where
+        :math:`x_t = x_0 + \sigma_t \omega` with :math:`\omega` independent of the measurement
+        noise, so the two variances add. The subtraction does appear in
+        :class:`deepinv.sampling.DDRM`, as the variance budget :math:`\sigma_{t+1}^2 - v` left to
+        fill when re-noising -- see :meth:`fused_denoised`.
+
+    .. seealso::
+
+        :meth:`deepinv.sampling.DDRMDataFidelity.fused_denoised` returns the equivalent
+        :math:`x_0` estimate, i.e. the Gaussian fusion of the denoiser output with the
+        measurement. This is what :class:`deepinv.sampling.DDRM` iterates on.
+
+    :param deepinv.models.Denoiser denoiser: Denoiser network.
+    :param float weight: Weighting factor for the data fidelity term. Default to 1.0.
     :param tuple[float] clip: If not `None`, clip the denoised output into `[clip[0], clip[1]]` interval. Default to `None`.
+    :param float eps: Numerical floor added to the spectral denominator. Default to 1e-8.
     """
 
     def __init__(
@@ -257,20 +291,90 @@ class DDRMDataFidelity(NoisyDataFidelity):
         super().__init__()
         self.d = dinv.optim.L2Distance()
         self.denoiser = denoiser
-        self.clip = clip
         self.weight = weight
         self.eps = eps
         if clip is not None:
             if len(clip) != 2:  # pragma: no cover
                 raise ValueError(f"clip must be None or length 2, but got {clip}")
-            clip = sorted(clip)    
+            clip = sorted(clip)
+        self.clip = clip
+
+    @staticmethod
+    def _sigma_y(physics: Physics) -> torch.Tensor | float:
+        r"""Standard deviation of the measurement noise, defaulting to 0.01 if unknown."""
+        return getattr(physics.noise_model, "sigma", 0.01)
+
+    @staticmethod
+    def _singular_values(physics: DecomposablePhysics) -> torch.Tensor:
+        r"""Singular values :math:`s` of the physics, as a non-negative real tensor."""
+        mask = physics.mask
+        if not isinstance(mask, torch.Tensor):
+            mask = torch.tensor(mask)
+        return mask.abs()
+
+    def _denoise(self, x: torch.Tensor, sigma, *args, **kwargs) -> torch.Tensor:
+        r"""Evaluate the denoiser in float32 and cast the result back to the input dtype."""
+        if isinstance(sigma, torch.Tensor):
+            sigma = sigma.to(torch.float32)
+        x0 = self.denoiser(x.to(torch.float32), sigma, *args, **kwargs).to(x.dtype)
+        if self.clip is not None:
+            x0 = torch.clip(x0, self.clip[0], self.clip[1])
+        return x0
+
+    def fused_denoised(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        physics: DecomposablePhysics,
+        sigma,
+        etab: float = 1.0,
+        *args,
+        **kwargs,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        r"""
+        Gaussian fusion of the denoiser output with the measurement.
+
+        In the spectral domain this combines the prior estimate
+        :math:`\bar{x}_0 = V^{\top}\denoiser{x_t}{\sigma_t}` (error variance :math:`\sigma_t^2`)
+        with the measurement :math:`\bar{y} = U^{\top} y` (error variance
+        :math:`\sigma_y^2 / s^2`):
+
+        .. math::
+            \tilde{x}_0 = V \frac{\sigma_y^2 \bar{x}_0 + \sigma_t^2 s \bar{y}}
+            {\sigma_y^2 + \sigma_t^2 s^2}, \qquad
+            v = \frac{\sigma_y^2 \sigma_t^2}{\sigma_y^2 + \sigma_t^2 s^2}.
+
+        It is related to :meth:`grad` by
+        :math:`\tilde{x}_0 = \denoiser{x_t}{\sigma_t} - \sigma_t^2 \nabla`, and it interpolates
+        between hard data consistency (:math:`\sigma_t s \gg \sigma_y`) and the unconstrained
+        denoiser output (:math:`\sigma_t s \ll \sigma_y`).
+
+        :param torch.Tensor x: Current iterate.
+        :param torch.Tensor y: Input corrupted observation.
+        :param deepinv.physics.DecomposablePhysics physics: decomposable physics model.
+        :param float sigma: Standard deviation of the noise of the model.
+        :param float etab: Strength of the measurement term, interpolating between the plain
+            denoiser output (`etab=0`) and the full fusion above (`etab=1`). Default to 1.0.
+
+        :return: (tuple of :class:`torch.Tensor`) the fused estimate :math:`\tilde{x}_0` and the
+            per-singular-value residual variance :math:`v` (in the spectral domain).
+        """
+        sigma_y = self._sigma_y(physics)
+        s = self._singular_values(physics)
+        x0_t = self._denoise(x, sigma, *args, **kwargs)
+
+        denom = sigma_y**2 + sigma**2 * s**2 + self.eps
+        residual = physics.U_adjoint(physics.A(x0_t) - y)
+        fused = x0_t - etab * sigma**2 * physics.A_adjoint(physics.U(residual / denom))
+        var = etab**2 * sigma_y**2 * sigma**2 / denom
+        return fused, var
 
     def grad(
         self,
         x: torch.Tensor,
         y: torch.Tensor,
         physics: DecomposablePhysics,
-        sigma: float,
+        sigma,
         *args,
         get_model_outputs=False,
         **kwargs,
@@ -284,34 +388,25 @@ class DDRMDataFidelity(NoisyDataFidelity):
 
         :return: (:class:`torch.Tensor` or tuple of :class:`torch.Tensor`) score term (and denoised output if `get_model_outputs` is `True`).
         """
+        sigma_y = self._sigma_y(physics)
+        s = self._singular_values(physics)
 
-        if hasattr(physics.noise_model, "sigma"):
-            sigma_y = physics.noise_model.sigma
-        else:
-            sigma_y = 0.01
-        
         # 1. get x_0
-        x0_t = self.denoiser(x, sigma, *args, **kwargs)
+        x0_t = self._denoise(x, sigma, *args, **kwargs)
 
-        # 2. residual in SVD
+        # 2. residual in the SVD basis
         residual = physics.U_adjoint(physics.A(x0_t) - y)
 
-        # 3. the pseudo inverse
-        s = physics.mask
-        denom = torch.abs(sigma_y**2 - sigma**2 * s**2)
-        inv_denom = torch.where(denom > self.eps, 1.0 / denom, 0.0)
+        # 3. inverse of the (positive definite) spectral covariance
+        inv_denom = 1.0 / (sigma_y**2 + sigma**2 * s**2 + self.eps)
 
         # 4. the weighted grad
-        weighted_residual = inv_denom * residual
-        grad = physics.A_adjoint(physics.U(weighted_residual))
-
-        grad = self.weight * grad
+        grad = self.weight * physics.A_adjoint(physics.U(inv_denom * residual))
 
         if get_model_outputs:
             return grad, x0_t.detach()
 
         return grad
-
 
     def forward(
         self,

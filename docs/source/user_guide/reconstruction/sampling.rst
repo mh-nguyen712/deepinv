@@ -147,6 +147,9 @@ We implement the following noisy data-fidelity terms, which inherit from the :cl
    * - :class:`deepinv.sampling.DPSDataFidelity`
      - :math:`\nabla_{\hat x_t} \frac{\lambda}{2\sqrt{m}} \| \forw{\denoiser{\hat x_t}{\sigma_t}} - y \|`
 
+   * - :class:`deepinv.sampling.DDRMDataFidelity`
+     - :math:`-V \Sigma^{\top} \left(\sigma_y^2 \mathrm{Id} + \sigma_t^2 \Sigma\Sigma^{\top}\right)^{-1} \left(\Sigma V^{\top} \denoiser{\hat x_t}{\sigma_t} - U^{\top} y\right)` (requires :class:`deepinv.physics.DecomposablePhysics`)
+
 
 .. _diffusion_custom:
 

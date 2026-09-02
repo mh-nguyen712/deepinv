@@ -92,12 +92,32 @@ class DDRM(Reconstructor):
     It requires that the physics operator has a singular value decomposition, i.e.,
     it is :class:`deepinv.physics.DecomposablePhysics` class.
 
+    At each noise level :math:`\sigma_t`, the denoised estimate is combined with the measurement
+    through the closed-form Gaussian fusion of :class:`deepinv.sampling.DDRMDataFidelity`,
+
+    .. math::
+        \tilde{x}_0 = V \frac{\sigma_y^2 V^{\top}\denoiser{x_t}{\sigma_t} + \sigma_t^2 \Sigma^{\top} U^{\top} y}
+        {\sigma_y^2 + \sigma_t^2 \Sigma\Sigma^{\top}},
+
+    and the state is re-noised to the next level :math:`\sigma_{t+1}`. The fusion interpolates
+    between hard data consistency where the measurement is informative
+    (:math:`\sigma_t s \gg \sigma_y`) and the plain denoiser output elsewhere
+    (:math:`\sigma_t s \ll \sigma_y`), which are the two regimes of the original algorithm.
+
+    .. note::
+
+        The re-noising accounts for the noise already carried by :math:`\tilde{x}_0`, adding only
+        :math:`\sqrt{\sigma_{t+1}^2 - v}` where :math:`v` is the residual variance of the fusion.
+        This is what keeps the iterate on the diffusion manifold, so that the denoiser removes the
+        measurement noise instead of baking it into the reconstruction.
+
     :param torch.nn.Module denoiser: a denoiser model that can handle different noise levels.
     :param list[int] sigmas: a list of noise levels to use in the diffusion, they should be in decreasing
         order from 1 to 0. Defaults to ``np.linspace(1, 0, 100)``, i.e., 100 equally spaced noise levels from 1 to 0.
-    :param float eta: hyperparameter
-    :param float etab: hyperparameter
+    :param float eta: hyperparameter controlling the amount of noise resampled at each step, in :math:`[0, 1]`.
+    :param float etab: hyperparameter controlling the strength of the measurement term, in :math:`[0, 1]`.
     :param bool verbose: if True, print progress
+    :param float eps: numerical floor used in the spectral denominator.
 
     |sep|
 
@@ -146,6 +166,7 @@ class DDRM(Reconstructor):
         self.verbose = verbose
         self.etab = etab
         self.eps = eps
+        self.data_fidelity = DDRMDataFidelity(denoiser=denoiser, eps=eps)
 
     def forward(self, y, physics: dinv.physics.DecomposablePhysics, seed=None):
         r"""
@@ -161,66 +182,30 @@ class DDRM(Reconstructor):
                 np.random.seed(seed)
                 torch.manual_seed(seed)
 
-            if hasattr(physics.noise_model, "sigma"):
-                sigma_noise = physics.noise_model.sigma
-            else:
-                sigma_noise = 0.01
-
-            if isinstance(physics, dinv.physics.Denoising):
-                mask = torch.ones_like(
-                    y
-                )  # TODO: fix for economic SVD decompositions (eg. Decolorize)
-            else:
-                mask = torch.cat([physics.mask.abs()] * y.shape[0], dim=0)
-
             c = np.sqrt(1 - self.eta**2)
-            y_bar = physics.U_adjoint(y)
-            case = mask > sigma_noise
-            y_bar[case] = y_bar[case] / (mask[case] + self.eps)
-            nsr = torch.zeros_like(mask)
-            nsr[case] = sigma_noise / (mask[case] + self.eps)
 
-            # iteration 1
-            # compute init noise
-            mean = torch.zeros_like(y_bar)
-            std = torch.ones_like(y_bar) * self.sigmas[0]
-            mean[case] = y_bar[case]
-            std[case] = (self.sigmas[0] ** 2 - nsr[case].pow(2)).sqrt()
-            x_bar = mean + std * torch.randn_like(y_bar) / np.sqrt(2.0)
-            x_bar_prev = x_bar
+            # start from pure noise at the largest noise level
+            x = physics.A_adjoint(y)
+            x = self.sigmas[0] * torch.randn_like(x)
 
-            # denoise
-            x = self.denoiser(physics.V(x_bar), self.sigmas[0])
+            for t in tqdm(range(self.max_iter - 1), disable=(not self.verbose)):
+                sigma, sigma_next = self.sigmas[t], self.sigmas[t + 1]
 
-            for t in tqdm(range(1, self.max_iter), disable=(not self.verbose)):
-                # add noise in transformed domain
-                x_bar = physics.V_adjoint(x)
-
-                case2 = torch.logical_and(case, (self.sigmas[t] < nsr))
-                case3 = torch.logical_and(case, (self.sigmas[t] >= nsr))
-
-                mean = (
-                    x_bar
-                    + c * self.sigmas[t] * (x_bar_prev - x_bar) / self.sigmas[t - 1]
-                )
-                mean[case2] = x_bar[case2] + c * self.sigmas[t] * (
-                    y_bar[case2] - x_bar[case2]
-                ) / (nsr[case2] + self.eps)
-                mean[case3] = (1.0 - self.etab) * x_bar[case3] + self.etab * y_bar[
-                    case3
-                ]
-
-                std = torch.ones_like(x_bar) * self.eta * self.sigmas[t]
-                std[case3] = (
-                    (self.sigmas[t] ** 2 - (nsr[case3] * self.etab).pow(2))
-                    .clamp(min=0)
-                    .sqrt()
+                # closed-form fusion of the denoised estimate with the measurement
+                x0, var = self.data_fidelity.fused_denoised(
+                    x, y, physics, sigma, etab=self.etab
                 )
 
-                x_bar = mean + std * torch.randn_like(x_bar) / np.sqrt(2.0)
-                x_bar_prev = x_bar
-                # denoise
-                x = self.denoiser(physics.V(x_bar), self.sigmas[t])
+                # re-noise to sigma_next, accounting for the noise already carried by x0
+                std = (sigma_next**2 - var).clamp(min=0.0).sqrt()
+                noise = torch.randn_like(physics.V_adjoint(x0))
+                x = (
+                    x0
+                    + c * (sigma_next / sigma) * (x - x0)
+                    + self.eta * physics.V(std * noise)
+                )
+
+            x = self.data_fidelity._denoise(x, self.sigmas[-1])
 
         return x
 
@@ -561,59 +546,6 @@ class DPS(PosteriorDiffusion):
         **kwargs,
     ):
         data_fidelity = DPSDataFidelity(
-            denoiser=denoiser, clip=[-1.0, 1.0], weight=weight
-        )
-
-        solver = EulerSolver(
-            timesteps=torch.linspace(1, 0.001, num_steps, device=device, dtype=dtype),
-            rng=rng,
-        )
-        if schedule.lower() == "vp":
-            sde = VariancePreservingDiffusion(
-                alpha=alpha,
-                device=device,
-                dtype=dtype,
-            )
-        elif schedule.lower() == "ve":
-            sde = VarianceExplodingDiffusion(
-                alpha=alpha,
-                device=device,
-                dtype=dtype,
-            )
-
-        else:
-            raise ValueError(
-                f"Only 'vp' and 've' schedules are supported, got {schedule}"
-            )
-
-        super().__init__(
-            sde=sde,
-            denoiser=denoiser,
-            data_fidelity=data_fidelity,
-            solver=solver,
-            verbose=verbose,
-            device=device,
-            dtype=dtype,
-            **kwargs,
-        )
-
-
-class DDRM(PosteriorDiffusion):
-
-    def __init__(
-        self,
-        denoiser: Denoiser,
-        schedule: str = "vp",
-        alpha: float = 1.0,
-        num_steps: int = 1000,
-        weight: float = 1.0,
-        verbose: bool = False,
-        device: str | torch.device = "cpu",
-        dtype=torch.float64,
-        rng: torch.Generator | None = None,
-        **kwargs,
-    ):
-        data_fidelity = DDRMDataFidelity(
             denoiser=denoiser, clip=[-1.0, 1.0], weight=weight
         )
 

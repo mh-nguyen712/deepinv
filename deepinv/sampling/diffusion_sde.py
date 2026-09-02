@@ -8,7 +8,11 @@ from deepinv.physics import Physics
 from deepinv.models.base import Reconstructor, Denoiser
 from deepinv.optim.data_fidelity import ZeroFidelity
 from deepinv.sampling.sde_solver import BaseSDESolver, SDEOutput
-from deepinv.sampling.noisy_datafidelity import NoisyDataFidelity, DPSDataFidelity
+from deepinv.sampling.noisy_datafidelity import (
+    NoisyDataFidelity,
+    DPSDataFidelity,
+    DDRMDataFidelity,
+)
 from deepinv.sampling.utils import trapz_torch
 from deepinv.models.wrapper import MinusOneOneDenoiserWrapper
 
@@ -1039,7 +1043,7 @@ class PosteriorDiffusion(Reconstructor):
             scale = self.sde.scale_t(t)
 
             if isinstance(self.sde, EDMDiffusionSDE) and isinstance(
-                self.data_fidelity, DPSDataFidelity
+                self.data_fidelity, (DPSDataFidelity, DDRMDataFidelity)
             ):
                 # For EDM, we can compute the score from model output directly, avoid redundant computation
                 data_fid_grad, model_output = self.data_fidelity.grad(

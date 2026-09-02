@@ -470,3 +470,108 @@ def test_noisy_data_fidelity(device):
             assert output.shape == x.shape
         except NotImplementedError:
             pass
+
+
+def test_ddrm_data_fidelity_gaussian_posterior(device):
+    r"""Check the closed form of DDRMDataFidelity against an analytic posterior.
+
+    With a Gaussian prior :math:`x_0 \sim \mathcal{N}(0, \sigma_d^2 I)` the MMSE denoiser
+    is available in closed form, so the Gaussian approximation behind
+    :class:`deepinv.sampling.DDRMDataFidelity` is exact and
+    :class:`deepinv.sampling.PosteriorDiffusion` must recover the analytic posterior.
+    """
+    from deepinv.sampling import DDRMDataFidelity
+
+    dtype = torch.float64
+    sigma_d, sigma_y = 0.5, 0.05
+    n_samples, shape = 2048, (1, 4, 4)
+
+    class GaussianMMSEDenoiser(torch.nn.Module):
+        def forward(self, x, sigma, **kwargs):
+            sigma = torch.as_tensor(sigma, device=x.device, dtype=x.dtype)
+            return x * sigma_d**2 / (sigma_d**2 + sigma**2)
+
+    # a mix of large, small and zero singular values
+    svals = torch.tensor(
+        [1.0, 1.0, 0.5, 0.5, 0.1, 0.1, 0.0, 0.0] * 2, device=device, dtype=dtype
+    ).reshape(1, *shape)
+    physics = dinv.physics.DecomposablePhysics(
+        mask=svals, device=device, noise_model=dinv.physics.GaussianNoise(sigma=sigma_y)
+    )
+    rng = torch.Generator(device=device).manual_seed(0)
+    x_true = sigma_d * torch.randn(1, *shape, generator=rng, device=device, dtype=dtype)
+    y = physics.A(x_true) + sigma_y * torch.randn(
+        1, *shape, generator=rng, device=device, dtype=dtype
+    )
+
+    # analytic posterior (diagonal since U = V = Id here)
+    denom = svals**2 * sigma_d**2 + sigma_y**2
+    post_mean = torch.where(
+        svals > 0, svals * sigma_d**2 / denom * y, torch.zeros_like(y)
+    )
+    post_std = torch.where(
+        svals > 0,
+        (sigma_d**2 * sigma_y**2 / denom).sqrt(),
+        torch.full_like(svals, sigma_d),
+    )
+
+    denoiser = GaussianMMSEDenoiser()
+    sde = VarianceExplodingDiffusion(
+        alpha=1.0, sigma_min=0.001, sigma_max=20.0, device=device, dtype=dtype
+    )
+    solver = EulerSolver(
+        timesteps=torch.linspace(1, 0.001, 400, device=device, dtype=dtype),
+        rng=torch.Generator(device=device),
+    )
+    sampler = PosteriorDiffusion(
+        data_fidelity=DDRMDataFidelity(denoiser=denoiser),
+        denoiser=denoiser,
+        sde=sde,
+        solver=solver,
+        device=device,
+        dtype=dtype,
+    )
+    with torch.no_grad():
+        samples = sampler(
+            y.expand(n_samples, -1, -1, -1),
+            physics,
+            x_init=(n_samples, *shape),
+            seed=0,
+        )
+
+    mean_err = (samples.mean(0, keepdim=True) - post_mean).abs().mean()
+    mean_err = mean_err / post_mean.abs().mean()
+    std_err = ((samples.std(0, keepdim=True) - post_std).abs() / post_std).mean()
+    # reference values: 0.048 / 0.025 here, vs 0.158 / 0.278 when the spectral
+    # covariance is taken as |sigma_y^2 - sigma_t^2 s^2| instead of sigma_y^2 + sigma_t^2 s^2
+    assert mean_err < 0.10, f"posterior mean off by {mean_err:.3f}"
+    assert std_err < 0.08, f"posterior std off by {std_err:.3f}"
+
+
+def test_ddrm_matches_data_fidelity_fusion(device):
+    r"""`DDRM` must iterate on the fusion returned by `DDRMDataFidelity`."""
+    from deepinv.sampling import DDRMDataFidelity
+
+    denoiser = DRUNet(pretrained="download").to(device)
+    x = torch.rand(1, 3, 32, 32, device=device)
+    physics = dinv.physics.Inpainting(
+        mask=0.5,
+        img_size=x.shape[1:],
+        noise_model=dinv.physics.GaussianNoise(sigma=0.05),
+        device=device,
+    )
+    y = physics(x)
+    data_fid = DDRMDataFidelity(denoiser=denoiser)
+    sigma = 0.3
+
+    with torch.no_grad():
+        grad, x0 = data_fid.grad(x, y, physics, sigma, get_model_outputs=True)
+        fused, var = data_fid.fused_denoised(x, y, physics, sigma)
+        # the fused estimate is the denoised one corrected by the guidance term
+        assert torch.allclose(fused, x0 - sigma**2 * grad, atol=1e-5)
+        # etab = 0 disables the measurement term altogether
+        fused0, var0 = data_fid.fused_denoised(x, y, physics, sigma, etab=0.0)
+        assert torch.allclose(fused0, x0, atol=1e-6)
+        assert torch.allclose(var0, torch.zeros_like(var0))
+        # the residual variance never exceeds the diffusion noise level
+        assert (var <= sigma**2 + 1e-9).all()

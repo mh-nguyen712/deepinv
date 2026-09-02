@@ -167,29 +167,47 @@ dps_weight = 200
 dps = dinv.sampling.DPSDataFidelity(denoiser=denoiser, weight=dps_weight)
 
 # %%
-# DDRM: decompose the operatior with SVD, resulting an explicit solution.
-# ------------------------------------------------
+# DDRM: decompose the operator with an SVD for a closed-form solution
+# -------------------------------------------------------------------
 #
-# PiGDM :footcite:t:`song2023pseudoinverse` retains conditional uncertainty but
-# approximates it with an isotropic Gaussian:
-#
-#
-# Writing :math:`J_D` for the denoiser Jacobian, the resulting gradient is
+# When the forward operator is decomposable, :math:`A = U\Sigma V^\top`, the integral
+# above can be computed in closed form. Taking the isotropic approximation
+# :math:`\Sigma_t(x_t) = \sigma_t^2 \mathrm I` gives
 #
 # .. math::
 #
-#       V\Sigma^\top 
-#         \left|\sigma_y^2 I-\sigma_t^2\Sigma\Sigma^\top \right|^\dagger
+#     p_t(y\mid x_t)
+#     \approx \mathcal N\!\left(
+#         y; A D_{\sigma_t}(x_t),
+#         \sigma_y^2 \mathrm I + \sigma_t^2 A A^\top
+#     \right),
+#
+# whose negative log-likelihood has gradient
+#
+# .. math::
+#
+#       V\Sigma^\top
+#         \left(\sigma_y^2 \mathrm I + \sigma_t^2\Sigma\Sigma^\top \right)^{-1}
 #         \left(
-#             \Sigma V^\top \denoiser{x_t}{\sigma_t} - U^\top y
+#             \Sigma V^\top D_{\sigma_t}(x_t) - U^\top y
 #         \right).
 #
+# Because the covariance is positive definite, no pseudo-inverse is needed and the
+# spectral weights are bounded by :math:`\min(\sigma_y^{-2}, (\sigma_t s)^{-2})`.
+# Equivalently, this term fuses the denoised estimate with the measurement in the
+# spectral domain, interpolating between hard data consistency where the measurement is
+# informative (:math:`\sigma_t s \gg \sigma_y`) and the plain denoiser output elsewhere.
+#
+# .. note::
+#
+#     This is the guidance term used by DDRM, but it is not the full DDRM algorithm.
+#     :class:`deepinv.sampling.DDRM` re-noises the fused estimate to the next noise level
+#     at every step, which keeps the iterate on the diffusion manifold. Plugging the term
+#     into :class:`deepinv.sampling.PosteriorDiffusion` with an Euler solver instead takes
+#     small gradient steps and leaves more of the measurement noise in the reconstruction.
 
-ddrm_weight = 4.0
-ddrm = dinv.sampling.DDRMDataFidelity(
-    denoiser=denoiser,
-    weight=ddrm_weight
-)
+ddrm_weight = 1.0
+ddrm = dinv.sampling.DDRMDataFidelity(denoiser=denoiser, weight=ddrm_weight)
 
 # # %%
 # # Moment Matching: retain a structured covariance
