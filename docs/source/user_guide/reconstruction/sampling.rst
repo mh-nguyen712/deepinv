@@ -112,6 +112,19 @@ Once the SDE is defined, we can obtain an approximate sample with any of the fol
    * - :class:`deepinv.sampling.HeunSolver`
      - `Second order Heun solver <https://en.wikipedia.org/wiki/Heun%27s_method>`_
 
+   * - :class:`deepinv.sampling.DDIMSolver`
+     - DDIM :footcite:t:`song2020denoising`, stepping in the noise level rather than in time.
+       Its `eta` interpolates between the deterministic sampler (`eta=0`) and ancestral sampling (`eta=1`).
+
+   * - :class:`deepinv.sampling.DDPMSolver`
+     - DDPM ancestral sampling :footcite:t:`ho2020denoising`, i.e. :class:`deepinv.sampling.DDIMSolver` with `eta=1`.
+
+
+The first two solvers integrate the drift and the diffusion in time, and work with any
+:class:`deepinv.sampling.BaseSDE`. The last two step in the noise level :math:`\sigma(t)` instead, and therefore
+require an SDE exposing its noise schedule and a denoised estimate, i.e. a
+:class:`deepinv.sampling.EDMDiffusionSDE`. They are usually much more accurate at a small number of steps, and
+they ignore the `alpha` of the SDE since their stochasticity is set by `eta` instead.
 
 The base class for solvers is :class:`deepinv.sampling.BaseSDESolver`, and :class:`deepinv.sampling.SDEOutput`
 provides a container for storing the output of the solver.

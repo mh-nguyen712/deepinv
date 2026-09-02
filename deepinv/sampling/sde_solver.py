@@ -315,3 +315,165 @@ class HeunSolver(BaseSDESolver):
             + 0.5 * (diffusion_0 + diffusion_1) * dW,
             2,
         )
+
+
+class DDIMSolver(BaseSDESolver):
+    r"""
+    DDIM / ancestral solver for diffusion SDEs :footcite:t:`song2020denoising`.
+
+    Unlike :class:`deepinv.sampling.EulerSolver` and :class:`deepinv.sampling.HeunSolver`, which integrate the
+    drift and diffusion in time, this solver steps directly in the noise level :math:`\sigma(t)`, in the rescaled
+    variable :math:`\bar{x}_t = x_t / s(t)`. In that variable every diffusion of
+    :class:`deepinv.sampling.EDMDiffusionSDE` is a pure variance-exploding process
+    :math:`\bar{x}_t = x_0 + \sigma(t) \varepsilon`, which makes the update below schedule-agnostic:
+
+    .. math::
+        x_{t_1} = s(t_1) \left( \hat{x}_0 + \sqrt{\sigma(t_1)^2 - w^2} \, \hat{\varepsilon} + w z \right),
+        \quad w = \eta \, \sigma(t_1) \frac{\sqrt{\sigma(t_0)^2 - \sigma(t_1)^2}}{\sigma(t_0)}
+
+    where :math:`\hat{x}_0 = \mathbb{E}\left[x_0 \vert x_{t_0}\right]` is given by
+    :meth:`denoised <deepinv.sampling.DiffusionSDE.denoised>`,
+    :math:`\hat{\varepsilon} = (x_{t_0} / s(t_0) - \hat{x}_0) / \sigma(t_0)` is the implied noise, and
+    :math:`z \sim \mathcal{N}(0, \mathrm{Id})`.
+
+    The coefficient :math:`w` is the exact standard deviation of the forward posterior
+    :math:`q(\bar{x}_{t_1} \vert \bar{x}_{t_0}, x_0)`, so :math:`\eta` interpolates between the deterministic
+    and the fully stochastic sampler:
+
+        - :math:`\eta = 0` gives DDIM. On a variance-preserving diffusion this is the sampler of
+          :footcite:t:`song2020denoising`; on a variance-exploding one it is the Euler sampler of
+          :footcite:t:`karras2022elucidating`.
+        - :math:`\eta = 1` gives DDPM ancestral sampling :footcite:t:`ho2020denoising`, see
+          :class:`deepinv.sampling.DDPMSolver`.
+
+    .. note::
+
+        This solver requires an SDE exposing the noise schedule and a denoised estimate, i.e. a
+        :class:`deepinv.sampling.EDMDiffusionSDE` (or a :class:`deepinv.sampling.PosteriorSDE` built from one),
+        and not a bare :class:`deepinv.sampling.BaseSDE`.
+
+    .. note::
+
+        The stochasticity is controlled by `eta` and **not** by the `alpha` of the SDE, which this solver ignores
+        (in the continuous-time limit the two are related by :math:`\alpha = \eta^2`). A warning is raised when
+        the two disagree.
+
+    .. note::
+
+        The `timesteps` must be decreasing. Contrary to the drift/diffusion solvers, `t_end = 0` is allowed and
+        makes the last step an exact denoising step, since :math:`\sigma(0) = 0`.
+
+    :param float eta: the amount of noise injected at each step, between `0` (deterministic, DDIM) and `1`
+        (fully stochastic, DDPM). Default to `0.0`.
+    :param torch.Tensor, numpy.ndarray, list timesteps: time steps at which the SDE will be discretized.
+    :param float t_start: the starting time of the SDE, optional. If not provided, it will be inferred from the `timesteps` argument.
+    :param float t_end: the ending time of the SDE, optional. If not provided, it will be inferred from the `timesteps` argument.
+    :param int num_steps: the number of time steps for the SDE, optional. If not provided, it will be inferred from the `timesteps` argument.
+    :param torch.Generator rng: A random number generator for reproducibility.
+
+    .. note::
+
+        You can either provide the `timesteps` argument directly, or specify `t_start`, `t_end`, and `num_steps` to generate the time steps automatically (linearly with constant stepsize). If both are provided, the `timesteps` argument will take precedence.
+    """
+
+    def __init__(
+        self,
+        eta: float = 0.0,
+        timesteps: Tensor | ndarray = None,
+        t_start: float | None = None,
+        t_end: float | None = None,
+        num_steps: int | None = None,
+        rng: torch.Generator = None,
+    ):
+        super().__init__(timesteps, t_start, t_end, num_steps, rng=rng)
+        self.eta = eta
+
+    def _check_sde(self, sde: BaseSDE, timesteps: Tensor = None) -> None:
+        r"""
+        Check that the `sde` and the `timesteps` are compatible with an ancestral update, and warn otherwise.
+
+        :param deepinv.sampling.BaseSDE sde: the SDE to solve.
+        :param torch.Tensor timesteps: the time steps used for this call, if they override the ones of the solver.
+        """
+        if not hasattr(sde, "denoised") or not hasattr(sde, "sigma_t"):
+            raise ValueError(
+                f"{type(self).__name__} requires an SDE exposing `sigma_t`, `scale_t` and `denoised`, such as "
+                f"`deepinv.sampling.EDMDiffusionSDE` or `deepinv.sampling.PosteriorSDE`, but got "
+                f"`{type(sde).__name__}`. Use `deepinv.sampling.EulerSolver` for a generic `BaseSDE`."
+            )
+        ts = self.timesteps if timesteps is None else timesteps
+        if ts is not None and len(ts) > 1 and ts[0] < ts[-1]:
+            warnings.warn(
+                f"{type(self).__name__} integrates the reverse-time SDE and expects decreasing `timesteps`, "
+                f"but got timesteps increasing from {float(ts[0])} to {float(ts[-1])}."
+            )
+        try:
+            alpha = getattr(sde, "alpha", None)
+            if alpha is not None and ts is not None and len(ts) > 0:
+                value = float(alpha(ts[0]) if callable(alpha) else alpha)
+                if abs(value - self.eta**2) > 1e-8:
+                    warnings.warn(
+                        f"The `alpha={value}` of the SDE is ignored by {type(self).__name__}: the amount of "
+                        f"stochasticity is set by `eta={self.eta}` instead, which corresponds to "
+                        f"`alpha={self.eta ** 2}` in the continuous-time limit."
+                    )
+        except Exception:  # pragma: no cover
+            pass
+
+    def sample(self, sde: BaseSDE, x_init: Tensor, *args, **kwargs) -> SDEOutput:
+        self._check_sde(sde, kwargs.get("timesteps", None))
+        return super().sample(sde, x_init, *args, **kwargs)
+
+    def step(
+        self, sde: BaseSDE, t0: float, t1: float, x0: torch.Tensor, *args, **kwargs
+    ) -> tuple[torch.Tensor, int]:
+        scale_0, scale_1 = sde.scale_t(t0), sde.scale_t(t1)
+        sigma_0, sigma_1 = sde.sigma_t(t0), sde.sigma_t(t1)
+
+        denoised = sde.denoised(x0, t0, *args, **kwargs)
+        noise = (x0 / scale_0 - denoised) / sigma_0
+
+        w = (
+            self.eta
+            * sigma_1
+            * torch.clamp(sigma_0**2 - sigma_1**2, min=0).sqrt()
+            / sigma_0
+        )
+        x1 = scale_1 * (denoised + torch.clamp(sigma_1**2 - w**2, min=0).sqrt() * noise)
+        if self.eta > 0:
+            x1 = x1 + scale_1 * w * self.randn_like(x0)
+        return x1, 1
+
+
+class DDPMSolver(DDIMSolver):
+    r"""
+    DDPM ancestral sampling :footcite:t:`ho2020denoising`.
+
+    This is :class:`deepinv.sampling.DDIMSolver` with :math:`\eta = 1`, for which the injected noise matches the
+    standard deviation of the forward posterior :math:`q(x_{t_1} \vert x_{t_0}, x_0)`. On a
+    :class:`deepinv.sampling.VariancePreservingDiffusion` the update is exactly the ancestral step of
+    :footcite:t:`ho2020denoising` with the :math:`\tilde{\beta}` variance.
+
+    :param torch.Tensor, numpy.ndarray, list timesteps: time steps at which the SDE will be discretized.
+    :param float t_start: the starting time of the SDE, optional. If not provided, it will be inferred from the `timesteps` argument.
+    :param float t_end: the ending time of the SDE, optional. If not provided, it will be inferred from the `timesteps` argument.
+    :param int num_steps: the number of time steps for the SDE, optional. If not provided, it will be inferred from the `timesteps` argument.
+    :param torch.Generator rng: A random number generator for reproducibility.
+    """
+
+    def __init__(
+        self,
+        timesteps: Tensor | ndarray = None,
+        t_start: float | None = None,
+        t_end: float | None = None,
+        num_steps: int | None = None,
+        rng: torch.Generator = None,
+    ):
+        super().__init__(
+            eta=1.0,
+            timesteps=timesteps,
+            t_start=t_start,
+            t_end=t_end,
+            num_steps=num_steps,
+            rng=rng,
+        )

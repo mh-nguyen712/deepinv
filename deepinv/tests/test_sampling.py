@@ -20,6 +20,8 @@ from deepinv.sampling import (
     DPSDataFidelity,
     EulerSolver,
     HeunSolver,
+    DDIMSolver,
+    DDPMSolver,
 )
 from deepinv.models import NCSNpp, ADMUNet, DRUNet
 
@@ -510,3 +512,226 @@ def test_noisy_data_fidelity(device):
             assert output.shape == x.shape
         except NotImplementedError:
             pass
+
+
+# --------------------------------------------------------------------------------------------
+# Ancestral (DDIM / DDPM) solvers
+# --------------------------------------------------------------------------------------------
+
+ANCESTRAL_SDE_CLASSES = [
+    VarianceExplodingDiffusion,
+    VariancePreservingDiffusion,
+    FlowMatching,
+]
+
+
+class _ToyDenoiser(dinv.models.Denoiser):
+    """A cheap nonlinear denoiser: the identities below must hold for any denoiser."""
+
+    def forward(self, x, sigma, **kwargs):
+        sigma = torch.as_tensor(sigma, dtype=x.dtype, device=x.device)
+        return torch.tanh(3 * x) / (1 + sigma**2) + 0.2 * torch.sin(x)
+
+
+def _toy_sde(sde_class, device, **kwargs):
+    timesteps = torch.linspace(0.9, 1e-3, 3, dtype=torch.float64, device=device)
+    return sde_class(
+        denoiser=_ToyDenoiser(),
+        solver=EulerSolver(timesteps=timesteps),
+        minus_one_one=False,
+        dtype=torch.float64,
+        device=device,
+        **kwargs,
+    )
+
+
+def _vp_alpha_bar(t, beta_min=0.1, beta_max=20.0):
+    """alpha_bar(t) = exp(-B(t)) of `VariancePreservingDiffusion`."""
+    return torch.exp(-(beta_min * t + 0.5 * t**2 * (beta_max - beta_min)))
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("sde_class", ANCESTRAL_SDE_CLASSES)
+def test_denoised_matches_tweedie(sde_class, device):
+    """`denoised` and `score` must be two views of the same quantity (Tweedie's formula)."""
+    sde = _toy_sde(sde_class, device)
+    x = torch.randn(4, 1, 8, 8, dtype=torch.float64, device=device) * 0.7
+    for t in (0.9, 0.5, 0.05):
+        scale, sigma = sde.scale_t(t), sde.sigma_t(t)
+        from_score = (x + (scale * sigma) ** 2 * sde.score(x, t)) / scale
+        assert torch.allclose(sde.denoised(x, t), from_score, atol=1e-9)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("eta", [0.0, 0.5, 1.0])
+def test_ddim_solver_matches_ddim_reference(eta, device, rng):
+    """A `DDIMSolver` step must reproduce the DDIM update of Song et al. exactly, for any eta."""
+    sde = _toy_sde(VariancePreservingDiffusion, device)
+    solver = DDIMSolver(eta=eta, timesteps=torch.linspace(0.9, 1e-3, 3), rng=rng)
+    x = torch.randn(4, 1, 8, 8, dtype=torch.float64, device=device) * 0.7
+
+    for t0, t1 in [(0.9, 0.85), (0.5, 0.4), (0.2, 0.05), (0.05, 1e-3)]:
+        t0 = torch.tensor(t0, dtype=torch.float64, device=device)
+        t1 = torch.tensor(t1, dtype=torch.float64, device=device)
+        a_0, a_1 = _vp_alpha_bar(t0), _vp_alpha_bar(t1)
+        x0_hat = sde.denoised(x, t0)
+        eps = (x / sde.scale_t(t0) - x0_hat) / sde.sigma_t(t0)
+        sigma_ddim = eta * (((1 - a_1) / (1 - a_0)) * (1 - a_0 / a_1)).sqrt()
+        expected = (
+            a_1.sqrt() * x0_hat
+            + torch.clamp(1 - a_1 - sigma_ddim**2, min=0).sqrt() * eps
+        )
+
+        if eta > 0:
+            rng.manual_seed(0)
+            expected = expected + sigma_ddim * solver.randn_like(x, seed=0)
+            rng.manual_seed(0)
+        out, nfe = solver.step(sde, t0, t1, x)
+        assert nfe == 1
+        assert torch.allclose(out, expected, atol=1e-10)
+
+
+@torch.no_grad()
+def test_ddpm_solver_matches_ancestral_reference(device, rng):
+    """A `DDPMSolver` step must reproduce Ho et al.'s ancestral update with the beta-tilde variance."""
+    sde = _toy_sde(VariancePreservingDiffusion, device)
+    solver = DDPMSolver(timesteps=torch.linspace(0.9, 1e-3, 3), rng=rng)
+    assert solver.eta == 1.0
+    x = torch.randn(4, 1, 8, 8, dtype=torch.float64, device=device) * 0.7
+
+    for t0, t1 in [(0.9, 0.85), (0.5, 0.4), (0.2, 0.05)]:
+        t0 = torch.tensor(t0, dtype=torch.float64, device=device)
+        t1 = torch.tensor(t1, dtype=torch.float64, device=device)
+        a_0, a_1 = _vp_alpha_bar(t0), _vp_alpha_bar(t1)
+        alpha, beta = a_0 / a_1, 1 - a_0 / a_1  # 1 - beta_i and beta_i
+        beta_tilde = beta * (1 - a_1) / (1 - a_0)
+        expected = (x + beta * sde.score(x, t0)) / alpha.sqrt()
+
+        rng.manual_seed(0)
+        expected = expected + beta_tilde.sqrt() * solver.randn_like(x, seed=0)
+        rng.manual_seed(0)
+        out, _ = solver.step(sde, t0, t1, x)
+        assert torch.allclose(out, expected, atol=1e-10)
+
+
+@torch.no_grad()
+def test_ddim_solver_matches_edm_euler_on_ve(device, rng):
+    """On a variance-exploding SDE, `DDIMSolver(eta=0)` is the Euler sampler of Karras et al."""
+    sde = _toy_sde(VarianceExplodingDiffusion, device)
+    solver = DDIMSolver(eta=0.0, timesteps=torch.linspace(0.9, 1e-3, 3), rng=rng)
+    x = torch.randn(4, 1, 8, 8, dtype=torch.float64, device=device) * 0.7
+
+    for t0, t1 in [(0.9, 0.85), (0.5, 0.4), (0.05, 1e-3)]:
+        t0 = torch.tensor(t0, dtype=torch.float64, device=device)
+        t1 = torch.tensor(t1, dtype=torch.float64, device=device)
+        sigma_0, sigma_1 = sde.sigma_t(t0), sde.sigma_t(t1)
+        expected = x + (sigma_1 - sigma_0) * (x - sde.denoised(x, t0)) / sigma_0
+        out, _ = solver.step(sde, t0, t1, x)
+        assert torch.allclose(out, expected, atol=1e-10)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("sde_class", ANCESTRAL_SDE_CLASSES)
+@pytest.mark.parametrize("solver_class", [DDIMSolver, DDPMSolver])
+def test_ancestral_solver_runs_on_every_sde(sde_class, solver_class, device, rng):
+    """The same solver must run unchanged on every schedule, including down to `t_end = 0`."""
+    timesteps = torch.linspace(0.9, 0.0, 6, dtype=torch.float64, device=device)
+    sde = _toy_sde(sde_class, device)
+    sde.solver = solver_class(timesteps=timesteps, rng=rng)
+    sample = sde.sample((2, 1, 8, 8), seed=0)
+    assert sample.shape == (2, 1, 8, 8)
+    assert torch.isfinite(sample).all()
+
+
+@torch.no_grad()
+def test_ancestral_solver_rejects_bare_sde(device, rng):
+    """A bare `BaseSDE` carries no noise schedule, so the solver must say so instead of failing obscurely."""
+    sde = dinv.sampling.BaseSDE(drift=lambda x, t: x, diffusion=lambda t: t)
+    solver = DDIMSolver(timesteps=torch.linspace(0.9, 1e-3, 3), rng=rng)
+    with pytest.raises(ValueError, match="requires an SDE exposing"):
+        solver.sample(sde, torch.zeros(1, 1, 4, 4))
+
+
+@torch.no_grad()
+def test_ancestral_solver_warns_when_alpha_is_ignored(device, rng):
+    """`alpha` is ignored by the ancestral solvers; the user must be told rather than silently surprised."""
+    timesteps = torch.linspace(0.9, 1e-3, 3, dtype=torch.float64, device=device)
+    sde = _toy_sde(VariancePreservingDiffusion, device, alpha=0.5)
+    solver = DDIMSolver(eta=0.0, timesteps=timesteps, rng=rng)
+    with pytest.warns(UserWarning, match="is ignored by DDIMSolver"):
+        solver.sample(sde, torch.zeros(1, 1, 4, 4, dtype=torch.float64, device=device))
+
+    # eta**2 == alpha: consistent, so no warning
+    import warnings as _warnings
+
+    consistent = DDIMSolver(eta=0.5**0.5, timesteps=timesteps, rng=rng)
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error", UserWarning)
+        consistent.sample(
+            sde, torch.zeros(1, 1, 4, 4, dtype=torch.float64, device=device)
+        )
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("solver_class", [EulerSolver, DDIMSolver, DDPMSolver])
+def test_posterior_sde_exposes_schedule(solver_class, device, rng):
+    """`PosteriorDiffusion` must work with every solver, including the ones needing the noise schedule."""
+    timesteps = torch.linspace(0.9, 1e-3, 4, dtype=torch.float64, device=device)
+    denoiser = _ToyDenoiser()
+    sde = _toy_sde(VariancePreservingDiffusion, device)
+    solver = solver_class(timesteps=timesteps, rng=rng)
+    posterior = PosteriorDiffusion(
+        data_fidelity=DPSDataFidelity(denoiser=denoiser),
+        sde=sde,
+        denoiser=denoiser,
+        solver=solver,
+        minus_one_one=False,
+        dtype=torch.float64,
+        device=device,
+    )
+    # the posterior SDE mirrors the unconditional interface
+    assert isinstance(posterior.posterior, dinv.sampling.PosteriorSDE)
+    for name in ("scale_t", "sigma_t", "score", "denoised"):
+        assert hasattr(posterior.posterior, name)
+
+    physics = dinv.physics.Inpainting(img_size=(1, 8, 8), mask=0.5, device=device)
+    x = torch.rand(2, 1, 8, 8, dtype=torch.float64, device=device)
+    y = physics(x)
+    x_hat = posterior(y, physics, x_init=(2, 1, 8, 8), seed=0)
+    assert x_hat.shape == (2, 1, 8, 8)
+    assert torch.isfinite(x_hat).all()
+
+
+@torch.no_grad()
+def test_posterior_denoised_matches_conditional_tweedie(device, rng):
+    """The posterior `denoised` must be Tweedie applied to the *conditional* score."""
+    timesteps = torch.linspace(0.9, 1e-3, 4, dtype=torch.float64, device=device)
+    denoiser = _ToyDenoiser()
+    sde = _toy_sde(VariancePreservingDiffusion, device)
+    posterior = PosteriorDiffusion(
+        data_fidelity=DPSDataFidelity(denoiser=denoiser),
+        sde=sde,
+        denoiser=denoiser,
+        solver=DDIMSolver(timesteps=timesteps, rng=rng),
+        minus_one_one=False,
+        dtype=torch.float64,
+        device=device,
+    )
+    physics = dinv.physics.Inpainting(img_size=(1, 8, 8), mask=0.5, device=device)
+    x = torch.rand(2, 1, 8, 8, dtype=torch.float64, device=device)
+    y = physics(x)
+    state = torch.randn(2, 1, 8, 8, dtype=torch.float64, device=device) * 0.5
+    t = 0.5
+
+    cond = posterior.posterior
+    scale, sigma = cond.scale_t(t), cond.sigma_t(t)
+    expected = (
+        state + (scale * sigma) ** 2 * cond.score(state, t, y=y, physics=physics)
+    ) / scale
+    assert torch.allclose(
+        cond.denoised(state, t, y=y, physics=physics), expected, atol=1e-9
+    )
+    # and it must differ from the unconditional one: the measurement has to enter
+    assert not torch.allclose(
+        cond.denoised(state, t, y=y, physics=physics), sde.denoised(state, t), atol=1e-6
+    )

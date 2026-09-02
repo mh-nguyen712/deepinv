@@ -18,6 +18,14 @@ from .diffusion_sde import (
     FlowMatching,
     VarianceExplodingDiffusion,
     VariancePreservingDiffusion,
+    PosteriorSDE,
     PosteriorDiffusion,
 )
-from .sde_solver import SDEOutput, BaseSDESolver, EulerSolver, HeunSolver
+from .sde_solver import (
+    SDEOutput,
+    BaseSDESolver,
+    EulerSolver,
+    HeunSolver,
+    DDIMSolver,
+    DDPMSolver,
+)

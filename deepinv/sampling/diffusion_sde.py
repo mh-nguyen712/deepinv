@@ -22,6 +22,17 @@ def _first_time_step(sde: BaseSDE, solver: BaseSDESolver, timesteps=None):
     return timesteps[0]
 
 
+def _denoised_from_score(sde, x: Tensor, t: Tensor | float, *args, **kwargs) -> Tensor:
+    r"""
+    Tweedie's formula :math:`\mathbb{E}\left[x_0 \vert x_t\right] = \left(x_t + s(t)^2 \sigma(t)^2 \nabla \log p_t(x_t)\right) / s(t)`.
+
+    Shared by the unconditional and the posterior SDEs, which only differ by the score they provide.
+    """
+    scale = sde.scale_t(t)
+    sigma = sde.sigma_t(t)
+    return (x + (scale * sigma) ** 2 * sde.score(x, t, *args, **kwargs)) / scale
+
+
 class BaseSDE(nn.Module):
     r"""
     Base class for Stochastic Differential Equation (SDE):
@@ -232,6 +243,30 @@ class DiffusionSDE(BaseSDE):
         :rtype: torch.Tensor
         """
         raise NotImplementedError
+
+    def denoised(self, x: Tensor, t: Tensor | float, *args, **kwargs) -> torch.Tensor:
+        r"""
+        The denoised estimate :math:`\mathbb{E}\left[x_0 \vert x_t\right]`, expressed in the data range (i.e. not scaled by :math:`s(t)`).
+
+        By default it is obtained from the :meth:`score <deepinv.sampling.DiffusionSDE.score>` through Tweedie's formula
+
+        .. math::
+            \mathbb{E}\left[x_0 \vert x_t\right] = \frac{x_t + s(t)^2 \sigma(t)^2 \nabla \log p_t(x_t)}{s(t)},
+
+        so any subclass implementing `score` gets it for free. This is the quantity consumed by the ancestral
+        solvers (:class:`deepinv.sampling.DDIMSolver`, :class:`deepinv.sampling.DDPMSolver`), which are expressed
+        in terms of :math:`s(t)`, :math:`\sigma(t)` and :math:`\mathbb{E}\left[x_0 \vert x_t\right]` rather than in
+        terms of the drift and diffusion.
+
+        :param torch.Tensor x: current state.
+        :param torch.Tensor, float t: current time step.
+        :param \*args: additional arguments for the `score`.
+        :param \*\*kwargs: additional keyword arguments for the `score`.
+
+        :return: the denoised estimate :math:`\mathbb{E}\left[x_0 \vert x_t\right]`.
+        :rtype: torch.Tensor
+        """
+        return _denoised_from_score(self, x, t, *args, **kwargs)
 
     def _handle_time_step(self, t: Tensor | float) -> Tensor:
         t = torch.as_tensor(t, device=self.device, dtype=self.dtype)
@@ -474,6 +509,30 @@ class EDMDiffusionSDE(DiffusionSDE):
         denoised = scale * model_output
         score = (denoised - x.to(self.dtype)) / (scale * sigma).pow(2)
         return score
+
+    def denoised(self, x: Tensor, t: Tensor | float, *args, **kwargs) -> torch.Tensor:
+        r"""
+        The denoised estimate :math:`\mathbb{E}\left[x_0 \vert x_t\right]`, given directly by the `denoiser`.
+
+        This overrides the generic Tweedie implementation of :meth:`deepinv.sampling.DiffusionSDE.denoised` to
+        avoid the round-trip through the score, which is ill-conditioned at small noise levels.
+
+        :param torch.Tensor x: current state.
+        :param torch.Tensor, float t: current time step.
+        :param \*args: additional arguments for the `denoiser`.
+        :param \*\*kwargs: additional keyword arguments for the `denoiser`, e.g., `class_labels` for class-conditional models.
+
+        :return: the denoised estimate :math:`\mathbb{E}\left[x_0 \vert x_t\right]`.
+        :rtype: torch.Tensor
+        """
+        sigma = self.sigma_t(t)
+        scale = self.scale_t(t)
+        return self.denoiser(
+            (x / scale).to(torch.float32),
+            sigma.to(torch.float32),
+            *args,
+            **kwargs,
+        ).to(self.dtype)
 
     def sample_init(
         self,
@@ -859,6 +918,87 @@ class VariancePreservingDiffusion(SongDiffusionSDE):
         )
 
 
+class PosteriorSDE(BaseSDE):
+    r"""
+    The reverse-time SDE of the posterior distribution :math:`p(x \vert y)`, built by :class:`deepinv.sampling.PosteriorDiffusion`.
+
+    It is a :class:`deepinv.sampling.BaseSDE`, so the drift/diffusion solvers
+    (:class:`deepinv.sampling.EulerSolver`, :class:`deepinv.sampling.HeunSolver`) use it as before.
+    In addition it mirrors the interface of the unconditional :class:`deepinv.sampling.DiffusionSDE`: it exposes
+    the noise schedule (`scale_t`, `sigma_t`) together with the conditional `score` and `denoised` estimates.
+    This is what allows the solvers that are expressed in terms of the noise schedule rather than in terms of the
+    drift, such as :class:`deepinv.sampling.DDIMSolver`, to be used for posterior sampling exactly as they are used
+    for unconditional sampling.
+
+    :param Callable drift: the drift term of the reverse-time posterior SDE, with signature ``(x, t, *args, **kwargs)``.
+    :param Callable diffusion: the diffusion coefficient of the reverse-time posterior SDE, with signature ``(t)``.
+    :param Callable scale_t: the scale :math:`s(t)` of the underlying unconditional SDE.
+    :param Callable sigma_t: the noise level :math:`\sigma(t)` of the underlying unconditional SDE.
+    :param Callable conditional_score: the conditional score :math:`\nabla_{x_t} \log p_t(x_t \vert y)`,
+        with signature ``(x, t, *args, **kwargs)``.
+    :param torch.dtype dtype: the data type of the computations.
+    :param torch.device device: the device for the computations.
+    :param \*args: additional arguments for the :class:`deepinv.sampling.BaseSDE`.
+    :param \*\*kwargs: additional keyword arguments for the :class:`deepinv.sampling.BaseSDE`.
+    """
+
+    def __init__(
+        self,
+        drift: Callable,
+        diffusion: Callable,
+        scale_t: Callable,
+        sigma_t: Callable,
+        conditional_score: Callable,
+        dtype=torch.float64,
+        device=torch.device("cpu"),
+        *args,
+        **kwargs,
+    ):
+        super().__init__(
+            drift=drift,
+            diffusion=diffusion,
+            dtype=dtype,
+            device=device,
+            *args,
+            **kwargs,
+        )
+        self.scale_t = scale_t
+        self.sigma_t = sigma_t
+        self.conditional_score = conditional_score
+
+    def score(self, x: Tensor, t: Tensor | float, *args, **kwargs) -> torch.Tensor:
+        r"""
+        The conditional score :math:`\nabla_{x_t} \log p_t(x_t \vert y)`.
+
+        The measurement `y` and the `physics` are passed through by the solver as keyword arguments.
+
+        :param torch.Tensor x: current state.
+        :param torch.Tensor, float t: current time step.
+        :param \*args: additional arguments for the conditional score.
+        :param \*\*kwargs: additional keyword arguments for the conditional score, e.g. `y` and `physics`.
+
+        :return: the conditional score :math:`\nabla_{x_t} \log p_t(x_t \vert y)`.
+        :rtype: torch.Tensor
+        """
+        return self.conditional_score(x, t, *args, **kwargs)
+
+    def denoised(self, x: Tensor, t: Tensor | float, *args, **kwargs) -> torch.Tensor:
+        r"""
+        The conditional denoised estimate :math:`\mathbb{E}\left[x_0 \vert x_t, y\right]`, expressed in the data range.
+
+        Obtained from the conditional :meth:`score <deepinv.sampling.PosteriorSDE.score>` through Tweedie's formula.
+
+        :param torch.Tensor x: current state.
+        :param torch.Tensor, float t: current time step.
+        :param \*args: additional arguments for the conditional score.
+        :param \*\*kwargs: additional keyword arguments for the conditional score, e.g. `y` and `physics`.
+
+        :return: the conditional denoised estimate :math:`\mathbb{E}\left[x_0 \vert x_t, y\right]`.
+        :rtype: torch.Tensor
+        """
+        return _denoised_from_score(self, x, t, *args, **kwargs)
+
+
 class PosteriorDiffusion(Reconstructor):
     r"""
     Posterior distribution sampling  for inverse problems using diffusion models by Reverse-time Stochastic Differential Equation (SDE).
@@ -956,9 +1096,15 @@ class PosteriorDiffusion(Reconstructor):
         def backward_diffusion(t):
             return self.sde.diffusion(t)
 
-        self.posterior = BaseSDE(
+        def conditional_score(x, t, y=None, physics=None, *args, **kwargs):
+            return self.score(y, physics, x, t, *args, **kwargs)
+
+        self.posterior = PosteriorSDE(
             drift=backward_drift,
             diffusion=backward_diffusion,
+            scale_t=self.sde.scale_t,
+            sigma_t=self.sde.sigma_t,
+            conditional_score=conditional_score,
             dtype=dtype,
             device=device,
             *args,
