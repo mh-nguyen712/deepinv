@@ -735,3 +735,28 @@ def test_posterior_denoised_matches_conditional_tweedie(device, rng):
     assert not torch.allclose(
         cond.denoised(state, t, y=y, physics=physics), sde.denoised(state, t), atol=1e-6
     )
+
+
+@torch.no_grad()
+def test_ddpm_solver_matches_smld_ancestral_on_ve(device, rng):
+    """On a variance-exploding SDE, `DDPMSolver` is the SMLD ancestral sampler of Song et al."""
+    sde = _toy_sde(VarianceExplodingDiffusion, device)
+    solver = DDPMSolver(timesteps=torch.linspace(0.9, 1e-3, 3), rng=rng)
+    x = torch.randn(4, 1, 8, 8, dtype=torch.float64, device=device) * 0.7
+
+    for t0, t1 in [(0.9, 0.85), (0.5, 0.4), (0.05, 1e-3)]:
+        t0 = torch.tensor(t0, dtype=torch.float64, device=device)
+        t1 = torch.tensor(t1, dtype=torch.float64, device=device)
+        sigma_0, sigma_1 = sde.sigma_t(t0), sde.sigma_t(t1)
+        score = sde.score(x, t0)
+
+        rng.manual_seed(0)
+        expected = (
+            x
+            + (sigma_0**2 - sigma_1**2) * score
+            + (sigma_1**2 * (sigma_0**2 - sigma_1**2) / sigma_0**2).sqrt()
+            * solver.randn_like(x, seed=0)
+        )
+        rng.manual_seed(0)
+        out, _ = solver.step(sde, t0, t1, x)
+        assert torch.allclose(out, expected, atol=1e-10)
